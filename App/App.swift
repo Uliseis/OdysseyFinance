@@ -117,6 +117,7 @@ struct OdysseyFinanceApp: App {
         CCStatementImport.runIfRequested(modelContainer)
         QuickAddSignFix.runIfRequested(modelContainer)
         InvestmentBasisMigration.runIfRequested(modelContainer)
+        EBWatermarkRewind.runIfRequested(modelContainer)
         #endif
     }
 }
