@@ -222,6 +222,7 @@ struct LockScreen: View {
                     Text("Odyssey Finance")
                         .font(.title.weight(.semibold))
                         .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
                     Label("Locked", systemImage: "lock.fill")
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.6))
@@ -235,6 +236,7 @@ struct LockScreen: View {
                 Spacer()
                 Button("Unlock", systemImage: "faceid", action: onUnlock)
                     .buttonStyle(.glassProminent)
+                    .tint(Theme.prominentFill)
                     .controlSize(.large)
             }
             .padding(Theme.Space.l)
