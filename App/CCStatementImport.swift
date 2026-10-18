@@ -61,7 +61,11 @@ enum CCStatementImport {
         let description: String?
     }
 
-    static let accountId = UUID(uuidString: "00000000-0000-0000-0000-0000000000CC")!
+    // Default target for rows without their own accountId: OFCC_ACCOUNT=<account uuid>, so no
+    // live record id has to live in the source.
+    static var accountId: UUID? {
+        ProcessInfo.processInfo.environment["OFCC_ACCOUNT"].flatMap(UUID.init(uuidString:))
+    }
 
     @MainActor
     static func runIfRequested(_ container: ModelContainer) {
@@ -76,7 +80,9 @@ enum CCStatementImport {
             print("[CCImport] nothing in Documents — nothing to do"); return
         }
         let ctx = container.mainContext
-        let acctId = accountId
+        guard let acctId = accountId else {
+            print("[CCImport] set OFCC_ACCOUNT=<account uuid>"); return
+        }
         guard let account = try? ctx.fetch(FetchDescriptor<Account>(
             predicate: #Predicate { $0.id == acctId })).first else {
             print("[CCImport] target account not found"); return
