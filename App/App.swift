@@ -217,7 +217,7 @@ struct LockScreen: View {
 
             VStack(spacing: Theme.Space.l) {
                 Spacer()
-                CompassMark(size: 96, tint: Theme.heroAccent, ringOpacity: 0.18)
+                CompassMark(size: 96, tint: Theme.heroAccent)
                 VStack(spacing: Theme.Space.xs) {
                     Text("Odyssey Finance")
                         .font(.title.weight(.semibold))
