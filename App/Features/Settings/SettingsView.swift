@@ -194,7 +194,7 @@ private struct SettingsBrandHeader: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.s) {
-            CompassMark(size: 56, tint: .brand, ringOpacity: 0)
+            AppIconTile(size: 60)
             Text("Odyssey Finance")
                 .font(.title3.weight(.semibold))
             Text("Version \(version)")
