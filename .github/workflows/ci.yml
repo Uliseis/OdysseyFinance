@@ -6,12 +6,54 @@ on:
   pull_request:
 
 jobs:
-  core-tests:
-    name: Core tests
+  guards:
+    name: Repo guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: scripts/check-repo.sh
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: scripts/check-repo.sh "$BASE"
+
+  tests:
+    name: Core + importer tests
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: xcodebuild -version && swift --version
-      - name: swift test
+      - name: Core
         run: swift test --package-path Core
+      - name: ImportFromPostgres
+        run: swift test --package-path Tools/ImportFromPostgres
+
+  ios-build:
+    name: iOS build
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate project
+        run: brew install xcodegen && xcodegen generate
+      - name: Build for the simulator
+        run: >
+          xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyFinance
+          -destination 'generic/platform=iOS Simulator' -configuration Debug
+          build CODE_SIGNING_ALLOWED=NO
+
+  ci:
+    name: CI
+    if: always()
+    needs: [guards, tests, ios-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All jobs passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) exit 1 ;; esac
+          done
