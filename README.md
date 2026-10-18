@@ -78,7 +78,7 @@ flowchart LR
 - **`Core/`**: a platform-agnostic Swift package (iOS and macOS), so the whole domain is tested on the Mac with `swift test`.
 - **`Tools/`**: the one-shot migration that moved the web app's Postgres data into a SwiftData store.
 
-The design decisions are written up in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the sync conflict policy, deduplication, the transfer model and the investment model.
+How it works is written up in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the sync conflict policy, deduplication, the transfer model and the investment model. Settled choices and their reasons are in [`docs/decisions.md`](docs/decisions.md).
 
 ## Repository layout
 
@@ -90,7 +90,9 @@ Tools/
   ImportFromPostgres/   Swift CLI: JSON dump → SwiftData store
 Spec/                   Frozen copy of the original Next.js app, kept as the porting spec
 Vercel/                 Static Apple App Site Association + bank-redirect hosting config
-docs/                   Architecture notes
+design/app-icon/        App icon generator and SVG sources
+scripts/                Repository guards run by CI
+docs/                   Architecture notes and the decision log
 project.yml             XcodeGen spec (the .xcodeproj is generated, not committed)
 ```
 
@@ -104,12 +106,22 @@ xcodegen generate              # creates OdysseyFinance.xcodeproj from project.y
 open OdysseyFinance.xcodeproj  # run the OdysseyFinance scheme on a simulator
 ```
 
-Simulator builds run unsigned. To run on a device with iCloud sync, change these in `project.yml` to your own values:
+Simulator builds run unsigned.
 
-- `DEVELOPMENT_TEAM`: your Apple Developer team.
-- `bundleIdPrefix` and the iCloud container (`iCloud.<your bundle id>`).
+### Running it on your own iPhone
 
-Then regenerate the project.
+A device build must be signed by your own Apple Developer team. Apple ties the bundle ID and the iCloud container to the team that registers them, so replace mine with yours:
+
+1. In `project.yml`, set `DEVELOPMENT_TEAM`, `bundleIdPrefix` and `PRODUCT_BUNDLE_IDENTIFIER`, plus the iCloud container (`iCloud.<your bundle id>`) in the entitlements block.
+2. In `App/App.swift`, set `iCloudContainerID` to the same container.
+3. Run `xcodegen generate` and build to your device.
+
+Bank linking also needs a redirect host of your own. The bank returns to an `https` URL, and iOS only hands it to an app that the domain vouches for:
+
+4. Serve an `apple-app-site-association` file like [`Vercel/aasa.json`](Vercel/aasa.json), listing `<your team ID>.<your bundle id>`, from a domain you control.
+5. Point `EBConfig.redirectURL` (`App/Features/Connections/BankLink.swift`) and the `webcredentials:` domain in `project.yml` at it. Register the same redirect URL in your Enable Banking application.
+
+Your build can't touch anyone else's data. Its Keychain items, background task and synced records are scoped to your team and your own iCloud account.
 
 ### Connecting a bank (optional)
 
@@ -122,8 +134,12 @@ Trading 212 live values work the same way: add an API key under **Settings → T
 ## Testing
 
 ```sh
-swift test --package-path Core
+swift test --package-path Core                     # domain logic
+swift test --package-path Tools/ImportFromPostgres # migration tool
+scripts/check-repo.sh                              # repository guards
 ```
+
+CI runs all three, plus an iOS simulator build.
 
 The Core package has **440+ tests**, covering FX, categorisation, transfers and their invariants, shared expenses, investments, budgets, recurring detection, statement import, Enable Banking request signing and decoding, and the CloudKit record coding, conflict resolution and pull/push pipelines. All fixtures are synthetic.
 
