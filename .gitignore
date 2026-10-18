@@ -1,41 +1,69 @@
-node_modules
-.next
-.vercel
-.turbo
-out
-build
-dist
-
-.env
-.env*.local
-!.env.example
-
-*.log
-.DS_Store
-
-next-env.d.ts
-*.tsbuildinfo
-.next/types
-
-# Xcode
-*.xcodeproj
-*.xcworkspace
-DerivedData/
-.swiftpm/
-xcuserdata/
-*.xcuserstate
-.build/
-Packages/
-
-# macOS
-.AppleDouble
-.LSOverride
-
-# Real Neon dump + imported dev store — live financial data + encrypted tokens. Never commit.
+# --- Personal data: never commit -------------------------------------------------
+# Postgres dump and imported dev store: live financial data and encrypted tokens.
 /dump.json
 /dump*.json
+DevData/
 *.store
 *.store-shm
 *.store-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+# App containers pulled off a device (devicectl copy from …) and their backups.
+/Library/
+/Documents/
+*-backups/
+*.bundle
+# Bank statements and one-shot import payloads pushed to the device.
+*.csv
+cc-import*.json
+net.json
+# Crash logs pulled from a device.
+*.ips
+*.crash
 Tools/ExportFromPostgres/export.stderr
-DevData/
+
+# --- Secrets: keys live in the Keychain, never in the repo -------------------------
+.env
+.env*.local
+!.env.example
+*.pem
+*.p8
+*.p12
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+
+# --- Xcode / SwiftPM ---------------------------------------------------------------
+*.xcodeproj
+*.xcworkspace
+*.xcresult
+DerivedData/
+build/
+.build/
+.swiftpm/
+Packages/
+xcuserdata/
+*.xcuserstate
+
+# --- Node (Spec/ web app, Tools/ExportFromPostgres) --------------------------------
+node_modules
+.next
+.next/types
+.vercel
+.turbo
+out
+dist
+next-env.d.ts
+*.tsbuildinfo
+*.log
+
+# --- Editors, agents, OS ------------------------------------------------------------
+.vscode/
+.idea/
+.claude/settings.local.json
+.claude/worktrees/
+.DS_Store
+.AppleDouble
+.LSOverride
