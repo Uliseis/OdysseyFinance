@@ -85,6 +85,15 @@ public enum BridgeOp: Sendable, Equatable {
         }
     }
 
+    // Whether applying it records how to reverse it. One op that doesn't takes Undo away from
+    // its whole batch, so Claude keeps these in batches of their own.
+    public var isUndoable: Bool {
+        switch self {
+        case .categorize, .createCategory, .createRule, .applyRules, .recordValuation, .requestBankSync, .requestReconnect: true
+        default: false
+        }
+    }
+
     public var isUndoOnly: Bool {
         switch self {
         case .restoreCategories, .deleteCategory, .deleteValuation: true

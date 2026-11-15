@@ -326,6 +326,7 @@ public enum BridgeExecutor {
             step.changes = [BridgeChange(id: connectionId, label: connection.institutionName ?? "bank",
                                          before: connection.expiresAt.map { "consent until \($0.formatted(.iso8601.year().month().day()))" },
                                          after: "reconnect screen opens")]
+            step.undo = []
             step.message = "Approving opens this bank's connection screen; you finish the reconnect with the bank"
 
         case .restoreCategories(let restores):

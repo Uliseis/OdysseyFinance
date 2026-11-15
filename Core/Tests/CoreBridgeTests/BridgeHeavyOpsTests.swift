@@ -130,6 +130,20 @@ final class BridgeHeavyOpsTests: XCTestCase {
         XCTAssertEqual(after.transactions.count, snapshot.transactions.count)
     }
 
+    func test_oneOpWithoutUndo_takesUndoAwayFromTheBatch_andIsUndoableSaysSo() throws {
+        let f = try BridgeFixture()
+        let connection = try XCTUnwrap(f.checking.connection)
+        let undoable: [BridgeOp] = [.categorize(txIds: [f.splitLeg.id], category: "Groceries"),
+                                    .requestReconnect(connectionId: connection.id)]
+        XCTAssertTrue(undoable.allSatisfy(\.isUndoable))
+        XCTAssertNotNil(run(undoable, f).undo)
+
+        let out = try XCTUnwrap(f.ctx.fetch(FetchDescriptor<Transaction>()).first { $0.transactionDescription == "To Savings" })
+        let mixed: [BridgeOp] = [.categorize(txIds: [f.bankRow.id], category: "Restaurants"), .unpairTransfer(txId: out.id)]
+        XCTAssertFalse(mixed[1].isUndoable)
+        XCTAssertNil(run(mixed, f).undo)
+    }
+
     func test_newOpsRoundTripThroughJSON() throws {
         let ops: [BridgeOp] = [
             .importStatement(accountId: UUID(), csv: statement), .deleteTransactions(txIds: [UUID()]),
