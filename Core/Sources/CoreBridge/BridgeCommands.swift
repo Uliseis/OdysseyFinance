@@ -40,6 +40,18 @@ public enum BridgeOp: Sendable, Equatable {
     case createSharedGroup(label: String, primaryTxId: UUID, reimbursementTxIds: [UUID])
     case deleteSharedGroup(groupId: UUID)
     case recordValuation(accountId: UUID, asOf: Date, marketValueEur: Decimal, cashValueEur: Decimal?, notes: String?)
+    case importStatement(accountId: UUID, csv: String)
+    case deleteTransactions(txIds: [UUID])
+    case adoptFeed(feedAccountId: UUID, manualAccountId: UUID)
+    case undoPensionSplit(debitTxId: UUID)
+    case createRoute(pattern: String, targetAccountId: UUID, sourceAccountId: UUID?, field: RuleField, match: RuleMatch,
+                     direction: TxDirection?, priority: Int)
+    case updateRoute(routeId: UUID, pattern: String?, targetAccountId: UUID?, sourceAccountId: UUID?, field: RuleField?,
+                     match: RuleMatch?, direction: TxDirection?, enabled: Bool?)
+    case deleteRoute(routeId: UUID)
+    // Asks the phone to do what only it can (bank keys and SCA live there); no data changes here.
+    case requestBankSync(connectionIds: [UUID]?)
+    case requestReconnect(connectionId: UUID)
     // Only the phone builds these, to undo an auto-applied batch. Never accepted from the inbox.
     case restoreCategories([CategoryRestore])
     case deleteCategory(id: UUID)
@@ -58,6 +70,15 @@ public enum BridgeOp: Sendable, Equatable {
         case .createSharedGroup: "createSharedGroup"
         case .deleteSharedGroup: "deleteSharedGroup"
         case .recordValuation: "recordValuation"
+        case .importStatement: "importStatement"
+        case .deleteTransactions: "deleteTransactions"
+        case .adoptFeed: "adoptFeed"
+        case .undoPensionSplit: "undoPensionSplit"
+        case .createRoute: "createRoute"
+        case .updateRoute: "updateRoute"
+        case .deleteRoute: "deleteRoute"
+        case .requestBankSync: "requestBankSync"
+        case .requestReconnect: "requestReconnect"
         case .restoreCategories: "restoreCategories"
         case .deleteCategory: "deleteCategory"
         case .deleteValuation: "deleteValuation"
@@ -80,13 +101,14 @@ public enum BridgeOp: Sendable, Equatable {
         case .createRule: .createRule
         case .applyRules: .applyRules
         case .recordValuation: .recordValuation
+        case .requestBankSync: .requestBankSync
         default: nil
         }
     }
 }
 
 public enum AutoApplyKind: String, Codable, Sendable, CaseIterable {
-    case categorizeUncategorized, createCategory, createRule, applyRules, recordValuation
+    case categorizeUncategorized, createCategory, createRule, applyRules, recordValuation, requestBankSync
 }
 
 // Flat JSON with an "op" discriminator: the shape Claude writes in tool calls.
@@ -95,6 +117,8 @@ extension BridgeOp: Codable {
         case op, txIds, txId, category, name, kind, parent, pattern, field, match, priority, ruleId
         case label, primaryTxId, reimbursementTxIds, groupId, accountId, asOf, marketValueEur
         case cashValueEur, notes, restores, id
+        case csv, feedAccountId, manualAccountId, debitTxId, targetAccountId, sourceAccountId, direction, routeId
+        case enabled, connectionIds, connectionId
     }
 
     public init(from decoder: Decoder) throws {
@@ -140,6 +164,39 @@ extension BridgeOp: Codable {
                                     marketValueEur: try c.decode(Decimal.self, forKey: .marketValueEur),
                                     cashValueEur: try c.decodeIfPresent(Decimal.self, forKey: .cashValueEur),
                                     notes: try c.decodeIfPresent(String.self, forKey: .notes))
+        case "importStatement":
+            self = .importStatement(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                    csv: try c.decode(String.self, forKey: .csv))
+        case "deleteTransactions":
+            self = .deleteTransactions(txIds: try c.decode([UUID].self, forKey: .txIds))
+        case "adoptFeed":
+            self = .adoptFeed(feedAccountId: try c.decode(UUID.self, forKey: .feedAccountId),
+                              manualAccountId: try c.decode(UUID.self, forKey: .manualAccountId))
+        case "undoPensionSplit":
+            self = .undoPensionSplit(debitTxId: try c.decode(UUID.self, forKey: .debitTxId))
+        case "createRoute":
+            self = .createRoute(pattern: try c.decode(String.self, forKey: .pattern),
+                                targetAccountId: try c.decode(UUID.self, forKey: .targetAccountId),
+                                sourceAccountId: try c.decodeIfPresent(UUID.self, forKey: .sourceAccountId),
+                                field: try c.decodeIfPresent(RuleField.self, forKey: .field) ?? .description,
+                                match: try c.decodeIfPresent(RuleMatch.self, forKey: .match) ?? .contains,
+                                direction: try c.decodeIfPresent(TxDirection.self, forKey: .direction),
+                                priority: try c.decodeIfPresent(Int.self, forKey: .priority) ?? 0)
+        case "updateRoute":
+            self = .updateRoute(routeId: try c.decode(UUID.self, forKey: .routeId),
+                                pattern: try c.decodeIfPresent(String.self, forKey: .pattern),
+                                targetAccountId: try c.decodeIfPresent(UUID.self, forKey: .targetAccountId),
+                                sourceAccountId: try c.decodeIfPresent(UUID.self, forKey: .sourceAccountId),
+                                field: try c.decodeIfPresent(RuleField.self, forKey: .field),
+                                match: try c.decodeIfPresent(RuleMatch.self, forKey: .match),
+                                direction: try c.decodeIfPresent(TxDirection.self, forKey: .direction),
+                                enabled: try c.decodeIfPresent(Bool.self, forKey: .enabled))
+        case "deleteRoute":
+            self = .deleteRoute(routeId: try c.decode(UUID.self, forKey: .routeId))
+        case "requestBankSync":
+            self = .requestBankSync(connectionIds: try c.decodeIfPresent([UUID].self, forKey: .connectionIds))
+        case "requestReconnect":
+            self = .requestReconnect(connectionId: try c.decode(UUID.self, forKey: .connectionId))
         case "restoreCategories":
             self = .restoreCategories(try c.decode([CategoryRestore].self, forKey: .restores))
         case "deleteCategory":
@@ -194,6 +251,39 @@ extension BridgeOp: Codable {
             try c.encode(market, forKey: .marketValueEur)
             try c.encodeIfPresent(cash, forKey: .cashValueEur)
             try c.encodeIfPresent(notes, forKey: .notes)
+        case .importStatement(let accountId, let csv):
+            try c.encode(accountId, forKey: .accountId)
+            try c.encode(csv, forKey: .csv)
+        case .deleteTransactions(let txIds):
+            try c.encode(txIds, forKey: .txIds)
+        case .adoptFeed(let feed, let manual):
+            try c.encode(feed, forKey: .feedAccountId)
+            try c.encode(manual, forKey: .manualAccountId)
+        case .undoPensionSplit(let debitTxId):
+            try c.encode(debitTxId, forKey: .debitTxId)
+        case .createRoute(let pattern, let target, let source, let field, let match, let direction, let priority):
+            try c.encode(pattern, forKey: .pattern)
+            try c.encode(target, forKey: .targetAccountId)
+            try c.encodeIfPresent(source, forKey: .sourceAccountId)
+            try c.encode(field, forKey: .field)
+            try c.encode(match, forKey: .match)
+            try c.encodeIfPresent(direction, forKey: .direction)
+            try c.encode(priority, forKey: .priority)
+        case .updateRoute(let routeId, let pattern, let target, let source, let field, let match, let direction, let enabled):
+            try c.encode(routeId, forKey: .routeId)
+            try c.encodeIfPresent(pattern, forKey: .pattern)
+            try c.encodeIfPresent(target, forKey: .targetAccountId)
+            try c.encodeIfPresent(source, forKey: .sourceAccountId)
+            try c.encodeIfPresent(field, forKey: .field)
+            try c.encodeIfPresent(match, forKey: .match)
+            try c.encodeIfPresent(direction, forKey: .direction)
+            try c.encodeIfPresent(enabled, forKey: .enabled)
+        case .deleteRoute(let routeId):
+            try c.encode(routeId, forKey: .routeId)
+        case .requestBankSync(let connectionIds):
+            try c.encodeIfPresent(connectionIds, forKey: .connectionIds)
+        case .requestReconnect(let connectionId):
+            try c.encode(connectionId, forKey: .connectionId)
         case .restoreCategories(let restores):
             try c.encode(restores, forKey: .restores)
         case .deleteCategory(let id), .deleteValuation(let id):
