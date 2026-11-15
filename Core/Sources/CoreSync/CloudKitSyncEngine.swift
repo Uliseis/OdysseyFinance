@@ -104,8 +104,15 @@ public final class CloudKitSyncEngine {
     // never push. Trigger this exactly once on the cutover launch. Idempotent if repeated:
     // CKSyncEngine dedupes pending changes by recordID and the lastKnownRecord tag makes a
     // re-send a no-op update.
-    public func seedInitialPush() {
+    // Set by the repair re-push: conflicts tied on the clock keep the device's values. Lasts
+    // until the pending queue drains or the app restarts.
+    public private(set) var preferLocalOnTie = false
+
+    // preferLocalOnTie: re-push everything so CloudKit picks up fields that were cleared on the
+    // device before cleared fields were pushed, without letting a stale server copy win a tie.
+    public func seedInitialPush(preferLocalOnTie: Bool = false) {
         guard let engine else { return }
+        self.preferLocalOnTie = preferLocalOnTie
         let pending = PushPipeline.allLocalSaves(in: makeContext())
         guard !pending.isEmpty else {
             SyncLog.log("seed: store empty, nothing to enqueue")
@@ -200,6 +207,10 @@ public final class CloudKitSyncEngine {
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let scope = context.options.scope
         let changes = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }
+        if changes.isEmpty, preferLocalOnTie {
+            preferLocalOnTie = false
+            SyncLog.log("repair: queue drained")
+        }
         let ctx = makeContext()
         // Prefer a conflict-resolved record (carries the server change tag) over a
         // freshly-built one, which is tagless and only valid as a first insert.
@@ -285,6 +296,9 @@ public final class CloudKitSyncEngine {
         guard let localValues = PushPipeline.currentValues(for: recordID, in: ctx) else {
             return nil  // local record is gone — accept the server's version
         }
+        if preferLocalOnTie, RecordCoding.clock(of: localValues) == RecordCoding.clock(of: serverRecord) {
+            return localValues
+        }
         if serverRecord.recordType == RecordType.transaction,
            let local = try? RecordCoding.decodeTransaction(localValues),
            let remote = try? RecordCoding.decodeTransaction(serverRecord) {
@@ -296,7 +310,8 @@ public final class CloudKitSyncEngine {
         }
         let localClock = RecordCoding.clock(of: localValues)
         let remoteClock = RecordCoding.clock(of: serverRecord)
-        return localClock > remoteClock ? localValues : nil
+        return ConflictResolver.localWinsPush(localClock: localClock, remoteClock: remoteClock,
+                                              preferLocalOnTie: preferLocalOnTie) ? localValues : nil
     }
 
     private func enqueueZoneIfNeeded(engine: CKSyncEngine) {
