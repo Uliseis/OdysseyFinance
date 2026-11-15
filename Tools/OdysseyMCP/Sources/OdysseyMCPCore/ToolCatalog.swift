@@ -8,14 +8,21 @@ import CoreModel
 @MainActor
 public final class ToolCatalog {
     let store: SnapshotStore
+    let keys: SigningKeyStore
     let now: @Sendable () -> Date
+    var drafts: [UUID: Draft] = [:]
+    var files: BridgeFiles { store.files }
 
-    public init(store: SnapshotStore, now: @escaping @Sendable () -> Date = { Date() }) {
+    public init(store: SnapshotStore, keys: SigningKeyStore = KeychainSigningKeyStore(),
+                now: @escaping @Sendable () -> Date = { Date() }) {
         self.store = store
+        self.keys = keys
         self.now = now
     }
 
-    public nonisolated static let tools: [Tool] = [
+    public nonisolated static let tools: [Tool] = readTools + changeTools
+
+    nonisolated static let readTools: [Tool] = [
         tool("overview",
              """
              Net worth and its parts (cash, card liabilities, investments) for a space, every account's \
@@ -93,6 +100,7 @@ public final class ToolCatalog {
 
     public func call(_ name: String, _ arguments: [String: Value]) async -> CallTool.Result {
         do {
+            if let result = try changeTool(name, arguments) { return result }
             if name == "snapshot_age" { return try snapshotAge() }
             let replica = try store.replica()
             let args = try Arguments(arguments)
@@ -208,14 +216,23 @@ struct Arguments {
         return d
     }
 
+    func decode<T: Decodable>(_ type: T.Type, key: String) throws -> T {
+        guard let value = raw[key] else { throw ArgumentError("\(key) is required") }
+        return try Self.decoder().decode(T.self, from: JSONEncoder().encode(value))
+    }
+
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
+        try Self.decoder().decode(T.self, from: JSONEncoder().encode(raw))
+    }
+
+    static func decoder() -> JSONDecoder {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .custom { decoder in
             let s = try decoder.singleValueContainer().decode(String.self)
             guard let date = Self.parseDate(s) else { throw ArgumentError("Not a date: \(s)") }
             return date
         }
-        return try d.decode(T.self, from: JSONEncoder().encode(raw))
+        return d
     }
 
     static func parseDate(_ s: String) -> Date? {

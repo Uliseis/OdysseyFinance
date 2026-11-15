@@ -2,6 +2,7 @@ import XCTest
 import Foundation
 import SwiftData
 import MCP
+import CryptoKit
 @testable import OdysseyMCPCore
 @testable import CoreBridge
 @testable import CoreLogic
@@ -13,6 +14,7 @@ final class OdysseyMCPTests: XCTestCase {
     nonisolated static let now = Date(timeIntervalSince1970: 1_773_144_000) // 2026-03-10 12:00 UTC
 
     private var dir: URL!
+    private let key = P256.Signing.PrivateKey()
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appending(path: "odyssey-mcp-\(UUID().uuidString)")
@@ -23,7 +25,7 @@ final class OdysseyMCPTests: XCTestCase {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    private func writeSnapshot(extraRow: Bool = false) throws {
+    private func writeSnapshot(extraRow: Bool = false, claude: BridgeAppState.Claude? = nil) throws {
         let schema = Schema(CoreModelSchema.allTypes)
         let ctx = ModelContext(try ModelContainer(for: schema, configurations: [
             ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]))
@@ -45,12 +47,13 @@ final class OdysseyMCPTests: XCTestCase {
         row(-20, -1, "UNKNOWN SHOP")
         if extraRow { row(-5, 0, "LATE ROW") }
         try ctx.save()
-        let snapshot = try BridgeExport.make(in: ctx, appState: .init(), redact: true, now: Self.now)
+        let snapshot = try BridgeExport.make(in: ctx, appState: .init(claude: claude), redact: true, now: Self.now)
         try BridgeCoding.encoder().encode(snapshot).write(to: dir.appending(path: "snapshot.json"))
     }
 
     private func catalog() -> ToolCatalog {
-        ToolCatalog(store: SnapshotStore(files: BridgeFiles(root: dir)), now: { OdysseyMCPTests.now })
+        ToolCatalog(store: SnapshotStore(files: BridgeFiles(root: dir)), keys: EphemeralSigningKeyStore(key: key),
+                    now: { OdysseyMCPTests.now })
     }
 
     private func json(_ result: CallTool.Result) throws -> [String: Any] {
@@ -59,9 +62,126 @@ final class OdysseyMCPTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
-    func test_everyToolIsReadOnly_andNamesAreUnique() {
+    private func errorText(_ result: CallTool.Result) -> String {
+        XCTAssertEqual(result.isError, true)
+        guard case .text(let text, _, _)? = result.content.first else { return "" }
+        return text
+    }
+
+    private func uncategorizedId(_ c: ToolCatalog) async throws -> String {
+        let out = try json(await c.call("query_transactions", ["uncategorized": true]))
+        let rows = try XCTUnwrap((out["data"] as? [String: Any])?["rows"] as? [[String: Any]])
+        return try XCTUnwrap(rows.first?["id"] as? String)
+    }
+
+    private func proposeShopping(_ c: ToolCatalog) async throws -> [String: Any] {
+        let id = try await uncategorizedId(c)
+        return try json(await c.call("propose_changes", [
+            "summary": "File the unknown shop under Shopping",
+            "ops": [["op": "createCategory", "name": "Shopping"], ["op": "categorize", "txIds": [.string(id)], "category": "Shopping"]],
+        ]))
+    }
+
+    func test_onlyTheChangeToolsWrite_andNamesAreUnique() {
         XCTAssertEqual(Set(ToolCatalog.tools.map(\.name)).count, ToolCatalog.tools.count)
-        XCTAssertTrue(ToolCatalog.tools.allSatisfy { $0.annotations.readOnlyHint == true })
+        let writers = Set(ToolCatalog.tools.filter { $0.annotations.readOnlyHint != true }.map(\.name))
+        XCTAssertEqual(writers, ["submit_changes", "withdraw_changes", "pairing_info"])
+    }
+
+    func test_proposeShowsWhatApplyingWouldDo_andWritesNothing() async throws {
+        try writeSnapshot()
+        let c = catalog()
+        let out = try await proposeShopping(c)
+        XCTAssertNotNil(out["draftId"] as? String)
+        XCTAssertEqual((out["ops"] as? [[String: Any]])?.compactMap { $0["status"] as? String }, ["applied", "applied"])
+        XCTAssertEqual((out["before"] as? [String: Any])?["uncategorized"] as? Int, 1)
+        XCTAssertEqual((out["after"] as? [String: Any])?["uncategorized"] as? Int, 0)
+        XCTAssertTrue((out["onPhone"] as? String)?.contains("doesn't accept changes") ?? false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appending(path: "inbox").path))
+        // The read tools still answer from the untouched snapshot.
+        let overview = try json(await c.call("overview", [:]))
+        XCTAssertEqual((overview["data"] as? [String: Any])?["uncategorizedCount"] as? Int, 1)
+    }
+
+    func test_submitWritesABatchSignedWithThisMacsKey() async throws {
+        try writeSnapshot()
+        let c = catalog()
+        let proposal = try await proposeShopping(c)
+        let draftId = try XCTUnwrap(proposal["draftId"] as? String)
+        let submitted = try json(await c.call("submit_changes", ["draftId": .string(draftId)]))
+        let batchId = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(submitted["batchId"] as? String)))
+
+        let envelope = try BridgeCoding.decoder().decode(
+            BridgeEnvelope.self, from: Data(contentsOf: dir.appending(path: "inbox/\(batchId.uuidString).json")))
+        let opened = try BridgeSigning.open(envelope, trusted: [BridgeSigning.keyId(key.publicKey): key.publicKey])
+        XCTAssertEqual(opened.sender, .verified(keyId: BridgeSigning.keyId(key.publicKey)))
+        XCTAssertEqual(opened.batch.ops.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appending(path: "keys/\(BridgeSigning.keyId(key.publicKey)).json").path))
+
+        let again = await c.call("submit_changes", ["draftId": .string(draftId)])
+        XCTAssertTrue(errorText(again).contains("No draft"))
+    }
+
+    func test_statusFollowsTheBatch_andOnlyPendingOnesCanBeWithdrawn() async throws {
+        try writeSnapshot()
+        let c = catalog()
+        func submit() async throws -> String {
+            let proposal = try await proposeShopping(c)
+            let draftId = try XCTUnwrap(proposal["draftId"] as? String)
+            let submitted = try json(await c.call("submit_changes", ["draftId": .string(draftId)]))
+            return try XCTUnwrap(submitted["batchId"] as? String)
+        }
+        let first = try await submit()
+        let pending = try json(await c.call("change_status", ["batchId": .string(first)]))
+        XCTAssertTrue((pending["status"] as? String)?.hasPrefix("pending") ?? false)
+        let withdrawn = try json(await c.call("withdraw_changes", ["batchId": .string(first)]))
+        XCTAssertEqual(withdrawn["status"] as? String, "withdrawn")
+        let gone = try json(await c.call("change_status", ["batchId": .string(first)]))
+        XCTAssertEqual(gone["status"] as? String, "unknown batch")
+
+        let second = try await submit()
+        let result = BridgeResult(batchId: UUID(uuidString: second)!, summary: "Shopping", status: .applied,
+                                  decidedAt: Self.now, decidedBy: .user, verified: true,
+                                  outcome: BatchOutcome(ops: [], undo: nil, autoApplyKinds: nil))
+        try FileManager.default.createDirectory(at: dir.appending(path: "results"), withIntermediateDirectories: true)
+        try BridgeCoding.encoder().encode(result).write(to: dir.appending(path: "results/\(second).json"))
+        let decided = try json(await c.call("change_status", ["batchId": .string(second)]))
+        XCTAssertEqual(decided["status"] as? String, "applied")
+        let list = try json(await c.call("change_status", [:]))
+        XCTAssertEqual((list["recent"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((list["pending"] as? [Any])?.count, 0)
+        let late = await c.call("withdraw_changes", ["batchId": .string(second)])
+        XCTAssertTrue(errorText(late).contains("already decided"))
+    }
+
+    func test_undoOpsAreRefused_andAFailingOpShowsInThePreview() async throws {
+        try writeSnapshot()
+        let c = catalog()
+        let refused = await c.call("propose_changes", [
+            "summary": "x", "ops": [["op": "deleteCategory", "id": .string(UUID().uuidString)]]])
+        XCTAssertTrue(errorText(refused).contains("isn't available"))
+
+        let id = try await uncategorizedId(c)
+        let out = try json(await c.call("propose_changes", [
+            "summary": "x", "ops": [["op": "categorize", "txIds": [.string(id)], "category": "Nonexistent"]]]))
+        XCTAssertEqual((out["ops"] as? [[String: Any]])?.first?["status"] as? String, "failed")
+        XCTAssertTrue((out["onPhone"] as? String)?.contains("doesn't accept") ?? false)
+    }
+
+    func test_whatThePhoneWillDo_followsItsSettingsAndPairing() async throws {
+        let keyId = BridgeSigning.keyId(key.publicKey)
+        try writeSnapshot(claude: .init(acceptsChanges: true, trustedKeyIds: [keyId],
+                                        autoApply: [.createCategory, .categorizeUncategorized]))
+        let paired = try await proposeShopping(catalog())["onPhone"] as? String ?? ""
+        XCTAssertTrue(paired.hasPrefix("Applies automatically"), paired)
+
+        try writeSnapshot(claude: .init(acceptsChanges: true, trustedKeyIds: [], autoApply: [.createCategory]))
+        let unpaired = try await proposeShopping(catalog())["onPhone"] as? String ?? ""
+        XCTAssertTrue(unpaired.contains("isn't paired") && unpaired.contains("categorizeUncategorized"), unpaired)
+
+        let pairing = try json(await catalog().call("pairing_info", [:]))
+        XCTAssertEqual(pairing["keyId"] as? String, keyId)
+        XCTAssertEqual(pairing["pairedOnPhone"] as? Bool, false)
     }
 
     func test_overview_answersFromTheSnapshot_withItsTimestamp() async throws {
@@ -111,7 +231,7 @@ final class OdysseyMCPTests: XCTestCase {
         let binary = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appending(path: "OdysseyMCP")
         let process = Process()
         process.executableURL = binary
-        process.environment = ["ODYSSEY_BRIDGE_DIR": dir.path]
+        process.environment = ["ODYSSEY_BRIDGE_DIR": dir.path, "ODYSSEY_BRIDGE_KEY": "ephemeral"]
         let input = Pipe(), output = Pipe()
         process.standardInput = input
         process.standardOutput = output
