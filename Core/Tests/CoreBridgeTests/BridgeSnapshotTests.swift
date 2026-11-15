@@ -111,4 +111,11 @@ final class BridgeSnapshotTests: XCTestCase {
         XCTAssertEqual(try replica.context.fetchCount(FetchDescriptor<Transaction>()), 5_000)
         XCTAssertLessThan(elapsed, 10)
     }
+
+    func test_appStateWithoutClaudeSettings_stillDecodes() throws {
+        let old = #"{"cycleStartDay":20,"cycleStartsEarlyOnWeekends":true,"automation":{"recurringEnabled":false,"recurringMuted":[],"recurringDeclined":[],"recurringPins":[],"pensionEnabled":false,"pensionDeclinedArrivals":[]}}"#
+        let state = try BridgeCoding.decoder().decode(BridgeAppState.self, from: Data(old.utf8))
+        XCTAssertEqual(state.cycleStartDay, 20)
+        XCTAssertNil(state.claude)
+    }
 }
