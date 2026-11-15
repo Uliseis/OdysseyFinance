@@ -9,7 +9,7 @@ import Foundation
 // Names — Accounts tab: account-new, account-edit, anchor, interest. Transactions tab:
 // categorize, tx-detail, tx-detail-transfer, tx-new, tx-edit, pair-partner, shared-create,
 // match-income. Investments tab: valuation.
-// Settings tab (pushes): connections, eb-setup, connect-bank, transfers, trading212, automations,
+// Settings tab (pushes): connections, eb-setup, connect-bank, transfers, trading212, automations, claude,
 // spaces, space-edit, groups, group-edit,
 // connection-detail, categories, category-edit, rules, rule-edit, routes, route-edit, shared,
 // shared-detail, budgets, budget-edit (the *-edit variants also auto-open the

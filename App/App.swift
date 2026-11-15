@@ -67,7 +67,7 @@ struct OdysseyFinanceApp: App {
         }
         BackgroundSync.afterSync = { container in
             await AutomationRunner.run(container.mainContext)
-            await ClaudeBridge.exportSnapshot(container.mainContext)
+            await ClaudeBridge.exchange(container.mainContext)
         }
         NotificationResponder.shared.container = container
         NotificationResponder.shared.engine = engine
@@ -91,7 +91,7 @@ struct OdysseyFinanceApp: App {
                         // store in the simulator before they are ever pointed at the phone.
                         // Behind the CloudKit gate they could only ever be tested in anger.
                         runDebugRoutines()
-                        await ClaudeBridge.exportSnapshot(modelContainer.mainContext)
+                        await ClaudeBridge.exchange(modelContainer.mainContext)
                         return
                     }
                     do {
@@ -115,7 +115,7 @@ struct OdysseyFinanceApp: App {
                     // Cold launch: scenePhase never transitions into the initial .active.
                     await ForegroundBankSync.runIfDue(
                         modelContainer.mainContext, engine: syncEngine)
-                    await ClaudeBridge.exportSnapshot(modelContainer.mainContext)
+                    await ClaudeBridge.exchange(modelContainer.mainContext)
                 }
         }
         .modelContainer(modelContainer)
@@ -158,6 +158,7 @@ struct RootView: View {
     @State private var appLock = AppLock()
     @State private var returningFromBackground = false
     @State private var bankLinkMessage: String?
+    @State private var claudeInbox = ClaudeInbox.shared
 
     private var lockEnabled: Bool { requireUnlock && !authGateBypassed }
 
@@ -183,6 +184,7 @@ struct RootView: View {
             } message: {
                 Text(bankLinkMessage ?? "")
             }
+            .sheet(item: $claudeInbox.current) { ClaudeReviewView(item: $0) }
             .onChange(of: scenePhase) { _, phase in
                 // Materialize charges captured by the App Intent while the app was suspended.
                 // Only once the engine is up, so we don't race start() on cold launch (the
@@ -195,7 +197,7 @@ struct RootView: View {
                 if phase == .active {
                     Task {
                         await ForegroundBankSync.runIfDue(modelContext, engine: syncEngine)
-                        await ClaudeBridge.exportSnapshot(modelContext)
+                        await ClaudeBridge.exchange(modelContext)
                     }
                 }
                 // Face ID's own prompt also takes the scene inactive and back; only a return
