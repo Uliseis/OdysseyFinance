@@ -29,24 +29,43 @@ enum CCStatementImport {
         let notes: String?
     }
 
+    struct CategorySeed: Decodable {
+        let name: String
+        let kind: String?
+    }
+
+    // Rows to categorize by hand (categorySource .manual, so rules never overwrite them).
+    struct CategorizeSeed: Decodable {
+        let category: String
+        let externalIds: [String]
+    }
+
+    struct SharedGroupSeed: Decodable {
+        let label: String
+        let primaryExternalId: String
+        let reimbursementExternalIds: [String]
+    }
+
     struct Payload: Decodable {
-        let rules: [RuleSeed]?
-        let transactions: [Row]
-        let valuations: [ValuationSeed]?
+        var rules: [RuleSeed]?
+        var transactions: [Row] = []
+        var valuations: [ValuationSeed]?
         // Deleted before inserts, so a row can be replaced under the same externalId. An
         // auto-recurring id is also declined so the automation doesn't re-book it.
-        let deleteExternalIds: [String]?
+        var deleteExternalIds: [String]?
         // Debit-leg externalIds of pension splits to undo (both legs go, the arrival is
         // declined), and arrivals to decline up front so the automation never splits them.
-        let undoPensionSplits: [String]?
-        let declinePensionArrivals: [String]?
-        let archiveAccountIds: [String]?
+        var undoPensionSplits: [String]?
+        var declinePensionArrivals: [String]?
+        var archiveAccountIds: [String]?
+        var categories: [CategorySeed]?
+        var categorize: [CategorizeSeed]?
+        var sharedGroups: [SharedGroupSeed]?
+        // yyyy-mm-dd: re-run the rules over every uncategorized row since then, on any account.
+        var categorizeSince: String?
 
         init(from decoder: Decoder) throws {
-            if let bare = try? [Row](from: decoder) {
-                rules = nil; transactions = bare; valuations = nil; deleteExternalIds = nil
-                undoPensionSplits = nil; declinePensionArrivals = nil; archiveAccountIds = nil; return
-            }
+            if let bare = try? [Row](from: decoder) { transactions = bare; return }
             let c = try decoder.container(keyedBy: CodingKeys.self)
             rules = try c.decodeIfPresent([RuleSeed].self, forKey: .rules)
             transactions = try c.decodeIfPresent([Row].self, forKey: .transactions) ?? []
@@ -55,10 +74,14 @@ enum CCStatementImport {
             undoPensionSplits = try c.decodeIfPresent([String].self, forKey: .undoPensionSplits)
             declinePensionArrivals = try c.decodeIfPresent([String].self, forKey: .declinePensionArrivals)
             archiveAccountIds = try c.decodeIfPresent([String].self, forKey: .archiveAccountIds)
+            categories = try c.decodeIfPresent([CategorySeed].self, forKey: .categories)
+            categorize = try c.decodeIfPresent([CategorizeSeed].self, forKey: .categorize)
+            sharedGroups = try c.decodeIfPresent([SharedGroupSeed].self, forKey: .sharedGroups)
+            categorizeSince = try c.decodeIfPresent(String.self, forKey: .categorizeSince)
         }
         private enum CodingKeys: String, CodingKey {
             case rules, transactions, valuations, deleteExternalIds, undoPensionSplits, declinePensionArrivals
-            case archiveAccountIds
+            case archiveAccountIds, categories, categorize, sharedGroups, categorizeSince
         }
     }
 
@@ -103,6 +126,16 @@ enum CCStatementImport {
         }
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime]
+
+        for seed in payload?.categories ?? [] {
+            let name = seed.name
+            let exists = ((try? ctx.fetchCount(FetchDescriptor<CoreModel.Category>(
+                predicate: #Predicate { $0.name == name }))) ?? 0) > 0
+            if !exists {
+                _ = try? CoreLogic.Categories.create(
+                    name: name, kind: seed.kind.flatMap(CategoryKind.init(rawValue:)) ?? .expense, in: ctx)
+            }
+        }
 
         var seededRules = 0
         var updatedRules = 0
@@ -220,6 +253,45 @@ enum CCStatementImport {
                 notes: v.notes, in: ctx)
             valuations += 1
         }
+
+        func rows(_ ids: [String]) -> [Transaction] {
+            ids.flatMap { eid in
+                (try? ctx.fetch(FetchDescriptor<Transaction>(predicate: #Predicate { $0.externalId == eid }))) ?? []
+            }
+        }
+        var handCategorized = 0
+        for seed in payload?.categorize ?? [] {
+            let name = seed.category
+            guard let category = try? ctx.fetch(FetchDescriptor<CoreModel.Category>(
+                predicate: #Predicate { $0.name == name })).first else {
+                print("[CCImport] no category named \(name)"); continue
+            }
+            let txs = rows(seed.externalIds)
+            try? CoreLogic.Categories.recategorize(txs, to: category, in: ctx)
+            handCategorized += txs.count
+        }
+
+        var groups = 0
+        for seed in payload?.sharedGroups ?? [] {
+            guard let primary = rows([seed.primaryExternalId]).first else { continue }
+            let reimbursements = rows(seed.reimbursementExternalIds)
+            do {
+                try CoreLogic.SharedExpenses.createGroup(.init(
+                    label: seed.label, primaryTxId: primary.id,
+                    reimbursementTxIds: reimbursements.map(\.id)), in: ctx)
+                groups += 1
+            } catch { print("[CCImport] shared group refused \(seed.label): \(error)") }
+        }
+
+        var sinceCategorized = 0
+        let day = ISO8601DateFormatter()
+        day.formatOptions = [.withFullDate]
+        if let since = payload?.categorizeSince.flatMap({ day.date(from: $0) }) {
+            let ids = ((try? ctx.fetch(FetchDescriptor<Transaction>(
+                predicate: #Predicate { $0.category == nil && $0.bookedAt >= since }))) ?? []).map(\.id)
+            sinceCategorized = (try? CoreLogic.Categorize.applyRulesToTransactions(in: ctx, txIds: ids))?.updated ?? 0
+        }
+        print("[CCImport] handCategorized=\(handCategorized) groups=\(groups) sinceCategorized=\(sinceCategorized)")
 
         let uncategorized = (try? ctx.fetch(FetchDescriptor<Transaction>(
             predicate: #Predicate { $0.account?.id == acctId && $0.category == nil }))) ?? []
