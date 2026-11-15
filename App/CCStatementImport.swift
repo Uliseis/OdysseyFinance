@@ -46,6 +46,17 @@ enum CCStatementImport {
         let reimbursementExternalIds: [String]
     }
 
+    struct PairSeed: Decodable {
+        let debitExternalId: String
+        let creditExternalId: String
+    }
+
+    // A route-style mirror leg into a tracked account the bank line never reached.
+    struct MirrorSeed: Decodable {
+        let sourceExternalId: String
+        let targetAccountId: String
+    }
+
     struct Payload: Decodable {
         var rules: [RuleSeed]?
         var transactions: [Row] = []
@@ -63,6 +74,9 @@ enum CCStatementImport {
         var sharedGroups: [SharedGroupSeed]?
         // yyyy-mm-dd: re-run the rules over every uncategorized row since then, on any account.
         var categorizeSince: String?
+        var unpairExternalIds: [String]?
+        var pairs: [PairSeed]?
+        var mirrors: [MirrorSeed]?
 
         init(from decoder: Decoder) throws {
             if let bare = try? [Row](from: decoder) { transactions = bare; return }
@@ -78,10 +92,14 @@ enum CCStatementImport {
             categorize = try c.decodeIfPresent([CategorizeSeed].self, forKey: .categorize)
             sharedGroups = try c.decodeIfPresent([SharedGroupSeed].self, forKey: .sharedGroups)
             categorizeSince = try c.decodeIfPresent(String.self, forKey: .categorizeSince)
+            unpairExternalIds = try c.decodeIfPresent([String].self, forKey: .unpairExternalIds)
+            pairs = try c.decodeIfPresent([PairSeed].self, forKey: .pairs)
+            mirrors = try c.decodeIfPresent([MirrorSeed].self, forKey: .mirrors)
         }
         private enum CodingKeys: String, CodingKey {
             case rules, transactions, valuations, deleteExternalIds, undoPensionSplits, declinePensionArrivals
             case archiveAccountIds, categories, categorize, sharedGroups, categorizeSince
+            case unpairExternalIds, pairs, mirrors
         }
     }
 
@@ -270,6 +288,28 @@ enum CCStatementImport {
             try? CoreLogic.Categories.recategorize(txs, to: category, in: ctx)
             handCategorized += txs.count
         }
+
+        var transferFixes = 0
+        for tx in rows(payload?.unpairExternalIds ?? []) {
+            do { try CoreLogic.Transfers.unpair(tx, in: ctx); transferFixes += 1 }
+            catch { print("[CCImport] unpair refused \(tx.externalId): \(error)") }
+        }
+        for seed in payload?.pairs ?? [] {
+            guard let debit = rows([seed.debitExternalId]).first,
+                  let credit = rows([seed.creditExternalId]).first else { continue }
+            do { _ = try CoreLogic.Transfers.pairManual(debit, credit, in: ctx); transferFixes += 1 }
+            catch { print("[CCImport] pair refused \(seed.debitExternalId): \(error)") }
+        }
+        for seed in payload?.mirrors ?? [] {
+            guard let source = rows([seed.sourceExternalId]).first,
+                  let targetId = UUID(uuidString: seed.targetAccountId),
+                  let target = try? ctx.fetch(FetchDescriptor<Account>(
+                    predicate: #Predicate { $0.id == targetId })).first else { continue }
+            do {
+                if try CoreLogic.TransferRoutes.createMirror(from: source, to: target, in: ctx) != nil { transferFixes += 1 }
+            } catch { print("[CCImport] mirror refused \(seed.sourceExternalId): \(error)") }
+        }
+        print("[CCImport] transferFixes=\(transferFixes)")
 
         var groups = 0
         for seed in payload?.sharedGroups ?? [] {
