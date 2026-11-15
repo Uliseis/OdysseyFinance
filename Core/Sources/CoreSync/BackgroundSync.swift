@@ -18,7 +18,9 @@ public enum BackgroundSync {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: taskIdentifier,
             using: nil
-        ) { task in
+        ) { @Sendable task in
+            // Runs on BGTaskScheduler's queue; a closure inheriting register's MainActor
+            // isolation trapped there on every launch. handle hops to the main actor itself.
             handle(task: task, engine: engine)
         }
     }
