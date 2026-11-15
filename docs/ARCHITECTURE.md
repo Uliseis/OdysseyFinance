@@ -44,7 +44,8 @@ sequenceDiagram
 ```
 
 - **Snapshots, not models, cross threads.** Each model has a `Sendable` snapshot struct. Records are coded field by field: decimals and UUIDs as strings, enums as raw values, relations as referenced IDs.
-- **Conflict policy: last writer wins**, judged by a per-record `updatedAt` clock, with one exception. A manual category beats a non-manual one, so a bank re-sync never undoes a choice you made by hand.
+- **Conflict policy: last writer wins**, judged by a per-record `updatedAt` clock, with one exception. A manual category beats a non-manual one, so a bank re-sync never undoes a choice you made by hand. The clock is stored as `clock` or `updatedAt` depending on the record type (a sync run's is `finishedAt`); `RecordCoding.clock(of:)` reads whichever is there.
+- **A push sends every field, cleared ones included.** It builds on the cached system fields, which hold no data keys, so the fields come from the record's `changedKeys`. Encoders assign every key, nil included, so a category removed or a transfer unpaired on the phone reaches CloudKit.
 - **Pull is dependency-ordered**, parents before children. A second pass relinks the transaction ↔ shared-expense cycle.
 - **Background refresh** runs from a `BGProcessingTask`. Bank sync also runs on launch and on foreground, throttled to once every 15 minutes.
 

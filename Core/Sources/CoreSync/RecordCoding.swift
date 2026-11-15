@@ -567,3 +567,12 @@ public enum RecordCoding {
         NSDecimalNumber(decimal: d).stringValue
     }
 }
+
+extension RecordCoding {
+    // The last-writer-wins clock of any record. Older types store it as updatedAt, and a
+    // SyncRun's is when it finished (or started); reading only "clock" made the server win
+    // every conflict for them.
+    public static func clock(of r: CKRecord) -> Date {
+        (r["clock"] ?? r["updatedAt"] ?? r["finishedAt"] ?? r["startedAt"]) as? Date ?? .distantPast
+    }
+}

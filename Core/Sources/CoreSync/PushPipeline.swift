@@ -142,10 +142,13 @@ public enum PushPipeline {
 
     // Copy field values onto a base record (which may carry a server change tag), clearing
     // keys the values omit so a cleared optional isn't masked by the base's stale value.
+    // changedKeys, not allKeys: a key set to nil is missing from allKeys, so a field cleared
+    // on the phone was never sent and CloudKit kept the old value. Every encoder assigns
+    // every key, nil included, so changedKeys is the full field list.
     public static func merge(values: CKRecord, into base: CKRecord) {
-        let incoming = Set(values.allKeys())
+        let incoming = Set(values.changedKeys())
         for key in base.allKeys() where !incoming.contains(key) { base[key] = nil }
-        for key in values.allKeys() { base[key] = values[key] }
+        for key in incoming { base[key] = values[key] }
     }
 
     // The current local field values for a record (a fresh, tagless CKRecord in the sync

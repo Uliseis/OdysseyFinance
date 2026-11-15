@@ -208,6 +208,15 @@ public final class CloudKitSyncEngine {
             if case .saveRecord(let rid) = change {
                 if let record = resolvedRecords[rid] ?? PushPipeline.buildRecord(for: rid, in: ctx) {
                     building[rid] = record
+                } else {
+                    // No local row of any type: it was deleted after the save was queued.
+                    // Left pending, the save is skipped on every batch forever, and a copy
+                    // the server already has would come back on a restore.
+                    syncEngine.state.remove(pendingRecordZoneChanges: [change])
+                    if let uuid = UUID(uuidString: rid.recordName),
+                       SyncRecordStore.lastKnownRecord(for: uuid, in: ctx) != nil {
+                        syncEngine.state.add(pendingRecordZoneChanges: [.deleteRecord(rid)])
+                    }
                 }
             }
         }
@@ -285,8 +294,8 @@ public final class CloudKitSyncEngine {
             case .merge(let merged): return RecordCoding.encode(merged)
             }
         }
-        let localClock = localValues["clock"] as? Date ?? .distantPast
-        let remoteClock = serverRecord["clock"] as? Date ?? .distantPast
+        let localClock = RecordCoding.clock(of: localValues)
+        let remoteClock = RecordCoding.clock(of: serverRecord)
         return localClock > remoteClock ? localValues : nil
     }
 
