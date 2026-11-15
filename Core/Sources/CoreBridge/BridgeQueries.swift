@@ -153,7 +153,9 @@ public enum BridgeQueries {
         public var field: RuleField
         public var matchType: RuleMatch
         public var source: String?
+        public var sourceAccountId: UUID?
         public var target: String?
+        public var targetAccountId: UUID?
         public var direction: TxDirection?
         public var priority: Int
         public var enabled: Bool
@@ -323,7 +325,8 @@ extension BridgeReplica {
         return try ctx.fetch(FetchDescriptor<TransferRoute>(sortBy: [
             SortDescriptor(\.priority, order: .reverse), SortDescriptor(\.createdAt)])).map { r in
             .init(id: r.id, pattern: r.pattern, field: r.field, matchType: r.matchType,
-                  source: r.sourceAccount?.displayName, target: r.targetAccount?.displayName,
+                  source: r.sourceAccount?.displayName, sourceAccountId: r.sourceAccount?.id,
+                  target: r.targetAccount?.displayName, targetAccountId: r.targetAccount?.id,
                   direction: r.direction, priority: r.priority, enabled: r.enabled, mirrorCount: mirrors[r.id] ?? 0)
         }
     }

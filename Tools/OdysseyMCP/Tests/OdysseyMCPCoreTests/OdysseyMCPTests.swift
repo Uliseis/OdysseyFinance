@@ -168,6 +168,30 @@ final class OdysseyMCPTests: XCTestCase {
         XCTAssertTrue((out["onPhone"] as? String)?.contains("doesn't accept") ?? false)
     }
 
+    func test_aStatementFileOnTheMac_travelsInsideTheBatch() async throws {
+        try writeSnapshot()
+        let c = catalog()
+        let overview = try json(await c.call("overview", [:]))
+        let accountId = try XCTUnwrap(((overview["data"] as? [String: Any])?["accounts"] as? [[String: Any]])?.first?["id"] as? String)
+        let csv = dir.appending(path: "statement.csv")
+        try """
+        Type,Started Date,Completed Date,Description,Amount,Fee,Balance
+        CARD_PAYMENT,2026-03-02 12:00:00,2026-03-03 10:00:00,SAMPLE CAFE,-6.50,0.00,-6.50
+        CARD_PAYMENT,2026-03-04 18:00:00,2026-03-05 10:00:00,SAMPLE BOOKSHOP,-20.00,0.00,-26.50
+        """.write(to: csv, atomically: true, encoding: .utf8)
+
+        let out = try json(await c.call("propose_changes", [
+            "summary": "Import the March statement",
+            "ops": [["op": "importStatement", "accountId": .string(accountId), "csvPath": .string(csv.path)]]]))
+        let op = try XCTUnwrap((out["ops"] as? [[String: Any]])?.first)
+        XCTAssertEqual(op["status"] as? String, "applied", "\(op)")
+        XCTAssertEqual((op["changes"] as? [[String: Any]])?.filter { $0["after"] as? String == "new row" }.count, 2)
+
+        let missing = await c.call("propose_changes", [
+            "summary": "x", "ops": [["op": "importStatement", "accountId": .string(accountId), "csvPath": "/nonexistent.csv"]]])
+        XCTAssertTrue(errorText(missing).contains("Can't read the statement"))
+    }
+
     func test_whatThePhoneWillDo_followsItsSettingsAndPairing() async throws {
         let keyId = BridgeSigning.keyId(key.publicKey)
         try writeSnapshot(claude: .init(acceptsChanges: true, trustedKeyIds: [keyId],
