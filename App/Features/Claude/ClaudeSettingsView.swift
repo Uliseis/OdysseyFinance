@@ -5,6 +5,7 @@ import CoreBridge
 // Settings → Claude: whether this device takes Claude's changes, which Macs it trusts, what
 // may apply without review, and what has been applied (with Undo).
 struct ClaudeSettingsView: View {
+    @Environment(\.modelContext) private var modelContext
     @AppStorage(ClaudeSettings.acceptKey) private var accepts = false
     @State private var autoApply = ClaudeSettings.autoApply
     @State private var trusted = ClaudeSettings.trustedKeys
@@ -32,6 +33,7 @@ struct ClaudeSettingsView: View {
                     let sorted = trusted.values.sorted { $0.createdAt < $1.createdAt }
                     for i in offsets { trusted[sorted[i].keyId] = nil }
                     ClaudeSettings.trustedKeys = trusted
+                    publish()
                 }
                 Button("Pair a Mac…") { pairing = true }
             } header: {
@@ -68,7 +70,12 @@ struct ClaudeSettingsView: View {
         .navigationTitle("Claude")
         .task { await reload() }
         .refreshable { await reload() }
-        .sheet(isPresented: $pairing, onDismiss: { trusted = ClaudeSettings.trustedKeys }) {
+        .onChange(of: accepts) { publish() }
+        .onChange(of: autoApply) { publish() }
+        .sheet(isPresented: $pairing, onDismiss: {
+            trusted = ClaudeSettings.trustedKeys
+            publish()
+        }) {
             ClaudePairingView()
         }
     }
@@ -89,6 +96,11 @@ struct ClaudeSettingsView: View {
                 ClaudeSettings.autoApply = autoApply
             }
         }
+    }
+
+    // The snapshot carries these settings, so the Mac can tell Claude what the phone will do.
+    private func publish() {
+        Task { await ClaudeBridge.exportSnapshot(modelContext, force: true) }
     }
 
     private func reload() async {

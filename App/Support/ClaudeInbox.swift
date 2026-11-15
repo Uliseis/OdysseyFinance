@@ -34,8 +34,13 @@ final class ClaudeInbox {
         let inbox = root.appending(path: BridgePaths.inbox, directoryHint: .isDirectory)
         let files = await Task.detached { ClaudeBridge.list(inbox) }.value
         for url in files {
-            guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
-                  !ClaudeSettings.isProcessed(id), !pending.contains(where: { $0.id == id }) else { continue }
+            guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent) else { continue }
+            // Already decided here: a copy that came back (a replay, or iCloud restoring it) goes.
+            if ClaudeSettings.isProcessed(id) {
+                try? await Task.detached { try ClaudeBridge.remove(url) }.value
+                continue
+            }
+            guard !pending.contains(where: { $0.id == id }) else { continue }
             // A read can fail while iCloud is still downloading; try again next time.
             guard let data = try? await Task.detached(operation: { try ClaudeBridge.read(url) }).value else { continue }
             do {
