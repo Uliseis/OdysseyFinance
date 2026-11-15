@@ -104,6 +104,11 @@ struct OdysseyFinanceApp: App {
                         if ProcessInfo.processInfo.environment["OFSYNC_SEED_INITIAL_PUSH"] == "1" {
                             syncEngine.seedInitialPush()
                         }
+                        // One-time repair after the cleared-fields fix: re-push every record
+                        // so CloudKit drops values the device cleared, with ties going to the device.
+                        if ProcessInfo.processInfo.environment["OFSYNC_REPAIR_PUSH"] == "1" {
+                            syncEngine.seedInitialPush(preferLocalOnTie: true)
+                        }
                         // After start() so anything they write enqueues for CloudKit push.
                         runDebugRoutines()
                     } catch {

@@ -91,4 +91,13 @@ final class ClearedFieldSyncTests: XCTestCase {
         check(Build.portfolioValuation(), RecordCoding.encode)
         check(Build.syncRun(startedAt: t1), RecordCoding.encode)
     }
+
+    func test_onlyTheRepairPushSendsTiesToTheDevice() {
+        XCTAssertTrue(ConflictResolver.localWinsPush(localClock: t1, remoteClock: t0, preferLocalOnTie: false))
+        XCTAssertFalse(ConflictResolver.localWinsPush(localClock: t0, remoteClock: t0, preferLocalOnTie: false))
+        XCTAssertTrue(ConflictResolver.localWinsPush(localClock: t0, remoteClock: t0, preferLocalOnTie: true))
+        XCTAssertFalse(ConflictResolver.localWinsPush(localClock: t0, remoteClock: t1, preferLocalOnTie: true),
+                       "a genuinely newer server copy still wins during the repair")
+    }
 }
+
