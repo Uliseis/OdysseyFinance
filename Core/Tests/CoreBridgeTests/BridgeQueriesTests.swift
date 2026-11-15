@@ -38,6 +38,32 @@ final class BridgeQueriesTests: XCTestCase {
         XCTAssertEqual(o.uncategorizedCount, 3)
     }
 
+    // A live price times a quantity has more than two decimals; Claude should see cents. The
+    // ledger sum of a valued account isn't its balance, so it's replaced by cost basis and P&L.
+    func test_overview_roundsEurosToCents_andValuedAccountsShowCostBasisNotLedger() throws {
+        let f = try BridgeFixture()
+        f.ctx.insert(PortfolioValuation(account: f.broker, asOf: BridgeFixture.day(0),
+                                        marketValueEur: Decimal(string: "1234.56789")!, cashValueEur: 0, notes: nil))
+        try f.ctx.save()
+        let o = try replica(f).overview(now: now.addingTimeInterval(3_600))
+
+        func isCents(_ d: Decimal?) -> Bool {
+            guard var d else { return true }
+            var rounded = Decimal()
+            NSDecimalRound(&rounded, &d, 2, .plain)
+            return rounded == d
+        }
+        XCTAssertTrue(o.accounts.allSatisfy { isCents($0.balanceEur) && isCents($0.costBasisEur) && isCents($0.pnlEur) })
+        XCTAssertTrue([o.netWorth, o.cash, o.liabilities, o.investments].allSatisfy(isCents))
+        XCTAssertTrue(o.groups.allSatisfy { isCents($0.eur) })
+
+        let broker = try XCTUnwrap(o.accounts.first { $0.name == "Broker" })
+        XCTAssertNil(broker.balanceNative)
+        XCTAssertNotNil(broker.costBasisEur)
+        XCTAssertNotNil(broker.pnlEur)
+        XCTAssertNotNil(o.accounts.first { $0.name == "Main" }?.balanceNative)
+    }
+
     func test_transactions_filterByTextCategoryAmountAndCarryBankDetails() throws {
         let f = try BridgeFixture()
         let r = try replica(f)
