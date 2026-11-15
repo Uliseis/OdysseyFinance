@@ -18,9 +18,18 @@ struct ClaudeReviewView: View {
                     Text(item.batch.summary)
                         .font(.body)
                     ClaudeSenderLabel(sender: item.sender, label: item.senderLabel)
+                    if outcome.undo == nil && outcome.appliedCount > 0 {
+                        Label("Can’t be undone", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
                 } footer: {
-                    if !item.sender.isVerified {
-                        Text("Not signed by a Mac paired in Settings → Claude. Anything on your Mac or another device on your iCloud account could have written it. Read it carefully.")
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        if !item.sender.isVerified {
+                            Text("Not signed by a Mac paired in Settings → Claude. Anything on your Mac or another device on your iCloud account could have written it. Read it carefully.")
+                        }
+                        if outcome.undo == nil && outcome.appliedCount > 0 {
+                            Text("Changes marked below as permanent have no Undo, so nothing in this batch can be undone after you approve.")
+                        }
                     }
                 }
                 Section("Effect") {
@@ -31,7 +40,8 @@ struct ClaudeReviewView: View {
                                    value: "\(item.preview.before.uncategorized) → \(item.preview.after.uncategorized)")
                 }
                 ForEach(outcome.ops, id: \.index) { op in
-                    ClaudeOpSection(op: op, tense: .preview)
+                    ClaudeOpSection(op: op, tense: .preview,
+                                    permanent: item.batch.ops.indices.contains(op.index) && !item.batch.ops[op.index].isUndoable)
                 }
             }
             .navigationTitle("Claude’s Changes")
@@ -96,6 +106,7 @@ struct ClaudeOpSection: View {
     enum Tense { case preview, past }
     let op: OpOutcome
     let tense: Tense
+    var permanent = false
     private let shown = 50
 
     var body: some View {
@@ -120,7 +131,7 @@ struct ClaudeOpSection: View {
             Label(Self.title(op.op), systemImage: icon)
                 .foregroundStyle(color)
         } footer: {
-            Text("\(statusText). \(op.message)")
+            Text("\(statusText). \(op.message)" + (permanent && op.status == .applied ? " Permanent: no Undo." : ""))
         }
     }
 

@@ -34,6 +34,9 @@ extension ToolCatalog {
             - requestBankSync {connectionIds?} (the phone syncs those banks, or all, after the batch) · \
             requestReconnect {connectionId} (opens that bank's screen so the user can renew consent)
             Categories are referenced by name, records by id from the read tools.
+            Undo: categorize, createCategory, createRule, applyRules, recordValuation and the two requests can be \
+            undone from the phone. Everything else can't, and one such op takes Undo away from its whole batch, so \
+            send those in a batch of their own. The preview's "undoable" says which you have.
             """,
              inputSchema: .object([
                 "type": "object",
@@ -127,7 +130,7 @@ extension ToolCatalog {
         drafts[batch.id] = Draft(batch: batch, autoApplyKinds: preview.outcome.autoApplyKinds)
         return Self.result(try Self.json(Proposal(
             draftId: batch.id, asOf: base.snapshot.exportedAt, before: preview.before, after: preview.after,
-            ops: preview.outcome.ops.map(OpView.init), onPhone: try expectation(preview.outcome.autoApplyKinds, base.snapshot))))
+            undoable: preview.outcome.undo != nil, ops: preview.outcome.ops.map(OpView.init), onPhone: try expectation(preview.outcome.autoApplyKinds, base.snapshot))))
     }
 
     private func submit(_ args: Arguments) throws -> CallTool.Result {
@@ -236,7 +239,7 @@ extension ToolCatalog {
     struct Draft { let batch: BridgeBatch; let autoApplyKinds: [AutoApplyKind]? }
     struct Proposal: Encodable {
         let draftId: UUID; let asOf: Date; let before: BridgeEffect; let after: BridgeEffect
-        let ops: [OpView]; let onPhone: String
+        let undoable: Bool; let ops: [OpView]; let onPhone: String
     }
     struct OpView: Encodable {
         let index: Int; let op: String; let status: OpOutcome.Status; let message: String
