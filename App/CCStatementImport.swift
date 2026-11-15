@@ -40,11 +40,12 @@ enum CCStatementImport {
         // declined), and arrivals to decline up front so the automation never splits them.
         let undoPensionSplits: [String]?
         let declinePensionArrivals: [String]?
+        let archiveAccountIds: [String]?
 
         init(from decoder: Decoder) throws {
             if let bare = try? [Row](from: decoder) {
                 rules = nil; transactions = bare; valuations = nil; deleteExternalIds = nil
-                undoPensionSplits = nil; declinePensionArrivals = nil; return
+                undoPensionSplits = nil; declinePensionArrivals = nil; archiveAccountIds = nil; return
             }
             let c = try decoder.container(keyedBy: CodingKeys.self)
             rules = try c.decodeIfPresent([RuleSeed].self, forKey: .rules)
@@ -53,9 +54,11 @@ enum CCStatementImport {
             deleteExternalIds = try c.decodeIfPresent([String].self, forKey: .deleteExternalIds)
             undoPensionSplits = try c.decodeIfPresent([String].self, forKey: .undoPensionSplits)
             declinePensionArrivals = try c.decodeIfPresent([String].self, forKey: .declinePensionArrivals)
+            archiveAccountIds = try c.decodeIfPresent([String].self, forKey: .archiveAccountIds)
         }
         private enum CodingKeys: String, CodingKey {
             case rules, transactions, valuations, deleteExternalIds, undoPensionSplits, declinePensionArrivals
+            case archiveAccountIds
         }
     }
 
@@ -68,6 +71,8 @@ enum CCStatementImport {
         let currency: String
         let direction: String
         let description: String?
+        // A category name here books the row as a manual categorization (rules skip it).
+        let category: String?
     }
 
     // Default target for rows without their own accountId: OFCC_ACCOUNT=<account uuid>, so no
@@ -157,6 +162,12 @@ enum CCStatementImport {
             } catch { print("[CCImport] undo split refused \(eid): \(error)") }
         }
         for eid in payload?.declinePensionArrivals ?? [] { AutomationSettings.declineSplit(eid) }
+        var archived = 0
+        for raw in payload?.archiveAccountIds ?? [] {
+            guard let id = UUID(uuidString: raw), let target = try? ctx.fetch(FetchDescriptor<Account>(
+                predicate: #Predicate { $0.id == id })).first else { continue }
+            if (try? CoreLogic.Accounts.setArchived(target, true, in: ctx)) != nil { archived += 1 }
+        }
 
         var insertedIds: [UUID] = []
         var skipped = 0
@@ -186,6 +197,11 @@ enum CCStatementImport {
                 description: r.description,
                 counterparty: nil,
                 categorySource: .bank)
+            if let name = r.category {
+                tx.category = try? ctx.fetch(FetchDescriptor<CoreModel.Category>(
+                    predicate: #Predicate { $0.name == name })).first
+                if tx.category != nil { tx.categorySource = .manual }
+            }
             ctx.insert(tx)
             insertedIds.append(tx.id)
         }
@@ -211,7 +227,7 @@ enum CCStatementImport {
         let cats = (try? CoreLogic.Categorize.applyRulesToTransactions(
             in: ctx, txIds: updatedRules > 0 ? nil : uncategorized.map(\.id) + insertedIds))?.updated ?? 0
         try? ctx.save()
-        print("[CCImport] rules=\(seededRules) updatedRules=\(updatedRules) deleted=\(deleted) inserted=\(insertedIds.count) skipped=\(skipped) valuations=\(valuations) categorized=\(cats)")
+        print("[CCImport] rules=\(seededRules) updatedRules=\(updatedRules) deleted=\(deleted) archived=\(archived) inserted=\(insertedIds.count) skipped=\(skipped) valuations=\(valuations) categorized=\(cats)")
         if payload != nil { try? FileManager.default.removeItem(at: jsonURL) }
     }
 }
