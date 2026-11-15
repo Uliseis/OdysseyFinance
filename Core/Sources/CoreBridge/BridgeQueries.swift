@@ -33,7 +33,10 @@ public enum BridgeQueries {
         public var space: String?
         public var currency: String
         public var balanceEur: Decimal?
+        // nil for valued accounts: their ledger sum isn't a balance.
         public var balanceNative: Decimal?
+        public var costBasisEur: Decimal? = nil
+        public var pnlEur: Decimal? = nil
         // valuation | anchor | opening | bank: which rule produced the balance.
         public var balanceSource: String
         public var anchorAt: Date?
@@ -214,8 +217,9 @@ extension BridgeReplica {
         let accounts = try ctx.fetch(FetchDescriptor<Account>()).filter { includeArchived || !$0.archived }
         let eur = try CoreLogic.Accounts.displayBalancesEur(accounts, in: ctx)
         let native = CoreLogic.Accounts.computeNativeBalances(accounts, in: ctx)
-        let valued = Set(try CoreLogic.Investments.loadMetrics(
-            for: accounts.filter { $0.group?.kind == .investment }, in: ctx).filter { $0.value.valueEur != nil }.keys)
+        let metrics = try CoreLogic.Investments.loadMetrics(
+            for: accounts.filter { $0.group?.kind == .investment }, in: ctx).filter { $0.value.valueEur != nil }
+        let valued = Set(metrics.keys)
         let txs = try ctx.fetch(FetchDescriptor<Transaction>())
         var lastTx: [UUID: Date] = [:]
         var uncategorized: [UUID: Int] = [:]
@@ -230,7 +234,8 @@ extension BridgeReplica {
                 BridgeQueries.AccountLine(
                     id: a.id, name: a.displayName, institution: a.institution, group: a.group?.name,
                     groupKind: a.group?.kind.rawValue, space: a.space?.name, currency: a.currency,
-                    balanceEur: eur[a.id], balanceNative: native[a.id],
+                    balanceEur: eur[a.id].map(toCents), balanceNative: valued.contains(a.id) ? nil : native[a.id],
+                    costBasisEur: metrics[a.id]?.costBasisEur.map(toCents), pnlEur: metrics[a.id]?.pnlEur.map(toCents),
                     balanceSource: valued.contains(a.id) ? "valuation"
                         : CoreLogic.Accounts.hasAnchor(a) ? "anchor"
                         : CoreLogic.Accounts.isManual(a) ? "opening" : "bank",
@@ -245,9 +250,9 @@ extension BridgeReplica {
             snapshotAgeMinutes: max(0, Int(now.timeIntervalSince(snapshot.exportedAt) / 60)),
             space: scope?.current.name ?? "",
             spaces: spaces.map { .init(id: $0.id, name: $0.name, isDefault: $0.isDefault) },
-            netWorth: summary?.totalNetWorth ?? 0, cash: summary?.cashTotal ?? 0,
-            liabilities: summary?.liabilities ?? 0, investments: summary?.investmentValue ?? 0,
-            groups: summary?.groups.map { .init(name: $0.name, kind: $0.kind?.rawValue, eur: $0.eur, accounts: $0.count) } ?? [],
+            netWorth: toCents(summary?.totalNetWorth ?? 0), cash: toCents(summary?.cashTotal ?? 0),
+            liabilities: toCents(summary?.liabilities ?? 0), investments: toCents(summary?.investmentValue ?? 0),
+            groups: summary?.groups.map { .init(name: $0.name, kind: $0.kind?.rawValue, eur: toCents($0.eur), accounts: $0.count) } ?? [],
             currentPeriod: summary?.flow.last.map(month),
             uncategorizedCount: txs.filter { Self.needsCategory($0) && CoreLogic.AccountStatus.isCountedInCashNetWorth($0.account) }.count,
             accounts: lines,
@@ -448,3 +453,11 @@ public enum BridgeError: Error, CustomStringConvertible {
     }
 }
 
+
+// Valuations and FX conversions carry more than two decimals; answers are in cents.
+private func toCents(_ value: Decimal) -> Decimal {
+    var input = value
+    var rounded = Decimal()
+    NSDecimalRound(&rounded, &input, 2, .plain)
+    return rounded
+}
