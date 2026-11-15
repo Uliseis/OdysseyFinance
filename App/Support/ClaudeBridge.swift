@@ -31,12 +31,17 @@ enum ClaudeBridge {
     static func exportSnapshot(_ ctx: ModelContext) async {
         guard Date().timeIntervalSince(lastExport) > 30 else { return }
         lastExport = Date()
-        guard let root = await root() else { return }
+        guard let root = await root() else {
+            print("[ClaudeBridge] no iCloud Drive container; snapshot skipped")
+            return
+        }
         do {
             let snapshot = try BridgeExport.make(in: ctx, appState: appState, redact: true)
+            let url = root.appending(path: "snapshot.json")
             try await Task.detached(priority: .utility) {
-                try write(try BridgeCoding.encoder().encode(snapshot), to: root.appending(path: "snapshot.json"))
+                try write(try BridgeCoding.encoder().encode(snapshot), to: url)
             }.value
+            print("[ClaudeBridge] snapshot written to \(url.path)")
         } catch {
             print("[ClaudeBridge] snapshot export failed: \(error)")
         }
