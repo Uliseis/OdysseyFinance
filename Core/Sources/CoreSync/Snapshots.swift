@@ -1,7 +1,7 @@
 import Foundation
 import CoreModel
 
-public protocol SyncSnapshot: Sendable, Equatable {
+public protocol SyncSnapshot: Sendable, Equatable, Codable {
     var id: UUID { get }
     var clock: Date { get }
 }
