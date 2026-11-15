@@ -23,6 +23,16 @@ extension ToolCatalog {
             - pairTransfer {txIds: [debit, credit]} · unpairTransfer {txId}
             - createSharedGroup {label, primaryTxId, reimbursementTxIds} · deleteSharedGroup {groupId}
             - recordValuation {accountId, asOf, marketValueEur, cashValueEur?, notes?}
+            - importStatement {accountId, csvPath (a file on this Mac) or csv} (Revolut or Amex CSV into a manual \
+            account: new rows, quick-adds matched, duplicates skipped; unmatched quick-adds are listed)
+            - deleteTransactions {txIds} (transfer legs must be unpaired first)
+            - adoptFeed {feedAccountId, manualAccountId} (fold a discovered bank account into the manual one)
+            - undoPensionSplit {debitTxId} (the internal-transfer leg of an automatic pension split)
+            - createRoute {pattern, targetAccountId, sourceAccountId?, field?, match?, direction: debit|credit?, priority?} · \
+            updateRoute {routeId, pattern?, targetAccountId?, sourceAccountId?, field?, match?, direction?, enabled?} · \
+            deleteRoute {routeId} (editing, disabling or deleting a route deletes its mirrors; the preview lists them)
+            - requestBankSync {connectionIds?} (the phone syncs those banks, or all, after the batch) · \
+            requestReconnect {connectionId} (opens that bank's screen so the user can renew consent)
             Categories are referenced by name, records by id from the read tools.
             """,
              inputSchema: .object([
@@ -34,7 +44,9 @@ extension ToolCatalog {
                         "properties": .object([
                             "op": .object(["type": "string", "enum": [
                                 "categorize", "createCategory", "createRule", "updateRule", "deleteRule", "applyRules",
-                                "pairTransfer", "unpairTransfer", "createSharedGroup", "deleteSharedGroup", "recordValuation"]]),
+                                "pairTransfer", "unpairTransfer", "createSharedGroup", "deleteSharedGroup", "recordValuation",
+                                "importStatement", "deleteTransactions", "adoptFeed", "undoPensionSplit", "createRoute",
+                                "updateRoute", "deleteRoute", "requestBankSync", "requestReconnect"]]),
                             "txIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
                             "txId": uuid("Transaction id."), "category": string("Category name."),
                             "name": string("New category name."), "kind": string("Category kind."),
@@ -46,6 +58,16 @@ extension ToolCatalog {
                             "groupId": uuid("Shared group id."), "accountId": uuid("Investment account id."),
                             "asOf": date("Valuation date."), "marketValueEur": number("Market value in EUR."),
                             "cashValueEur": number("Cash held in EUR."), "notes": string("Valuation note."),
+                            "csvPath": string("Statement CSV on this Mac; the server reads it."),
+                            "csv": string("Statement CSV text, when there's no file."),
+                            "feedAccountId": uuid("Discovered bank account to fold in."),
+                            "manualAccountId": uuid("Manual account that takes over the feed."),
+                            "debitTxId": uuid("Pension split leg."), "routeId": uuid("Route id."),
+                            "targetAccountId": uuid("Manual account mirrors are booked on."),
+                            "sourceAccountId": uuid("Bank account the route watches."),
+                            "direction": string("debit or credit."), "enabled": bool("Route on or off."),
+                            "connectionIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
+                            "connectionId": uuid("Bank connection id."),
                         ]),
                     ])]),
                 ]),
@@ -94,7 +116,7 @@ extension ToolCatalog {
         guard let summary = args.string("summary")?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
             throw ArgumentError("summary is required: what the batch does and why, for the review sheet")
         }
-        let ops = try args.decode([BridgeOp].self, key: "ops")
+        let ops = try Self.inlineStatements(args).decode([BridgeOp].self, key: "ops")
         guard !ops.isEmpty else { throw ArgumentError("ops is empty") }
         if let op = ops.first(where: \.isUndoOnly) { throw ArgumentError("\(op.name) isn't available to Claude") }
 
@@ -165,6 +187,23 @@ extension ToolCatalog {
     }
 
     // MARK: - helpers
+
+    // A statement travels inside the batch; Claude names the file and the server reads it.
+    static func inlineStatements(_ args: Arguments) throws -> Arguments {
+        guard case .array(let ops)? = args.raw["ops"] else { return args }
+        var raw = args.raw
+        raw["ops"] = .array(try ops.map { op in
+            guard case .object(var fields) = op, case .string(let path)? = fields["csvPath"] else { return op }
+            let url = URL(filePath: (path as NSString).expandingTildeInPath)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                throw ArgumentError("Can't read the statement at \(path)")
+            }
+            fields["csv"] = .string(text)
+            fields["csvPath"] = nil
+            return .object(fields)
+        })
+        return try Arguments(raw)
+    }
 
     private func publishKey(_ key: P256.Signing.PrivateKey) throws {
         let keyId = BridgeSigning.keyId(key.publicKey)
