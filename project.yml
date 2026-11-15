@@ -41,6 +41,11 @@ targets:
           - processing
         BGTaskSchedulerPermittedIdentifiers:
           - com.uliseis.odysseyfinance.refresh
+        # Target of Vercel/ios-callback.html when a bank app opens the redirect in Safari.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.uliseis.odysseyfinance.bank-callback
+            CFBundleURLSchemes:
+              - odysseyfinance
     entitlements:
       path: App/OdysseyFinance.entitlements
       # Source of truth for capabilities: xcodegen regenerates the .entitlements file
@@ -52,9 +57,11 @@ targets:
           - iCloud.com.uliseis.odysseyfinance
         aps-environment: development
         # ASWebAuthenticationSession's https callback only fires if the app is associated
-        # with the redirect host. Served from Vercel/aasa.json.
+        # with the redirect host (webcredentials); applinks lets a bank app that opens the
+        # redirect itself land in the app. Served from Vercel/aasa.json.
         com.apple.developer.associated-domains:
           - webcredentials:odysseyfinance.vercel.app
+          - applinks:odysseyfinance.vercel.app
     dependencies:
       - package: Core
         product: CoreModel

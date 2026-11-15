@@ -3,6 +3,7 @@ import SwiftData
 import LocalAuthentication
 import UserNotifications
 import CoreModel
+import CoreLogic
 import CoreSync
 
 private let iCloudContainerID = "iCloud.com.uliseis.odysseyfinance"
@@ -151,6 +152,7 @@ struct RootView: View {
     @AppStorage(SecuritySettings.requireUnlockKey) private var requireUnlock = true
     @State private var unlocked = authGateBypassed || !SecuritySettings.requireUnlock
     @State private var authError: String?
+    @State private var bankLinkMessage: String?
 
     var body: some View {
         Group {
@@ -164,6 +166,18 @@ struct RootView: View {
             }
         }
         .task { if !unlocked && !authShowLockOnly { authenticate() } }
+        // Bank redirects that came back through Safari. Handled here rather than in the
+        // Connections views because leaving for the bank app re-locks the app, which tears
+        // those views down.
+        .onOpenURL { url in Task { await completeBankLink(url) } }
+        .alert(
+            "Bank Connection",
+            isPresented: Binding(get: { bankLinkMessage != nil }, set: { if !$0 { bankLinkMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(bankLinkMessage ?? "")
+        }
         .onChange(of: scenePhase) { _, phase in
             // Materialize charges captured by the App Intent while the app was suspended.
             // Only once the engine is up, so we don't race start() on cold launch (the
@@ -180,6 +194,19 @@ struct RootView: View {
                 unlocked = false
                 authError = nil
             }
+        }
+    }
+
+    private func completeBankLink(_ url: URL) async {
+        do {
+            guard let outcome = try await BankLink.completeExternal(url, in: modelContext) else { return }
+            bankLinkMessage = outcome.authorized
+                ? "\(outcome.institution) connected. \(pluralized(outcome.accountCount, "account")) authorized."
+                : "\(outcome.institution): authorization is still pending at the bank."
+        } catch CoreLogic.EBConnect.CallbackError.bankReported(let reason) {
+            bankLinkMessage = "The bank declined the connection (\(reason))."
+        } catch {
+            bankLinkMessage = "Couldn’t finish connecting the bank.\n\n\(error)"
         }
     }
 

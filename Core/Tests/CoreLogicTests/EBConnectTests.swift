@@ -135,4 +135,34 @@ final class EBConnectTests: XCTestCase {
         }
         XCTAssertNil(conn.sessionId)
     }
+
+    func testIsCallbackAcceptsRedirectAndAppSchemeForms() throws {
+        let redirect = try XCTUnwrap(URL(string: "https://example.com/eb/cb"))
+        func check(_ s: String) throws -> Bool {
+            C.isCallback(try XCTUnwrap(URL(string: s)), redirect: redirect, appScheme: "myapp")
+        }
+        XCTAssertTrue(try check("https://example.com/eb/cb?code=c&state=s"))
+        XCTAssertTrue(try check("myapp://example.com/eb/cb?code=c&state=s"))
+        XCTAssertFalse(try check("https://example.com/other?code=c"))
+        XCTAssertFalse(try check("https://evil.com/eb/cb?code=c"))
+        XCTAssertFalse(try check("otherapp://example.com/eb/cb?code=c"))
+    }
+
+    // A callback that arrives after the app was relaunched finds its connection by the
+    // state stored before the browser opened.
+    func testPendingConnectionForStateFindsOnlyPendingMatch() throws {
+        let ctx = try S.makeContext()
+        let target = try C.prepareConnection(
+            aspspName: "ING", country: "ES", state: "st-7", authorizationId: "a",
+            validUntil: .now, in: ctx)
+        try C.prepareConnection(
+            aspspName: "Revolut", country: "ES", state: "st-8", authorizationId: "b",
+            validUntil: .now, in: ctx)
+        XCTAssertEqual(try C.pendingConnection(forState: "st-7", in: ctx)?.id, target.id)
+        XCTAssertNil(try C.pendingConnection(forState: "nope", in: ctx))
+
+        try C.applySession(makeSession(), status: "AUTHORIZED",
+                           to: target, expectedState: "st-7", in: ctx)
+        XCTAssertNil(try C.pendingConnection(forState: "st-7", in: ctx))
+    }
 }

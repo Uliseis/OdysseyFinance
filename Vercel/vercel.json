@@ -3,6 +3,19 @@
     {
       "source": "/.well-known/apple-app-site-association",
       "destination": "/aasa.json"
+    },
+    {
+      "source": "/enablebanking/ios-callback",
+      "destination": "/ios-callback.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/enablebanking/ios-callback",
+      "headers": [
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
     }
   ]
 }

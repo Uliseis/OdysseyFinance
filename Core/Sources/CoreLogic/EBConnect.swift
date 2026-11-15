@@ -61,6 +61,22 @@ extension CoreLogic {
             return connection
         }
 
+        // A bank app that does SCA itself opens the redirect in Safari, outside the auth
+        // session. It then comes back as a universal link (https) or, via the page served at
+        // the redirect path, under the app's own scheme with the same host and path.
+        public static func isCallback(_ url: URL, redirect: URL, appScheme: String) -> Bool {
+            guard url.scheme == redirect.scheme || url.scheme == appScheme else { return false }
+            return url.host() == redirect.host() && url.path() == redirect.path()
+        }
+
+        // For a callback that outlived the auth session (app relaunched meanwhile).
+        @MainActor
+        public static func pendingConnection(forState state: String, in ctx: ModelContext) throws -> Connection? {
+            try ctx.fetch(FetchDescriptor<Connection>()).first {
+                $0.connector == .enablebanking && $0.status == .pending && storedState(of: $0) == state
+            }
+        }
+
         public static func parseCallback(_ url: URL) throws -> (code: String, state: String) {
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             func value(_ name: String) -> String? {

@@ -1,5 +1,13 @@
 {
   "webcredentials": {
     "apps": ["Q35DSRH5L8.com.uliseis.odysseyfinance"]
+  },
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["Q35DSRH5L8.com.uliseis.odysseyfinance"],
+        "components": [{ "/": "/enablebanking/ios-callback" }]
+      }
+    ]
   }
 }
