@@ -63,64 +63,20 @@ struct DashboardModel {
     static func load(
         scope: SpaceScope, cycle: CoreLogic.Dashboard.Cycle = CycleSettings.current, in ctx: ModelContext, now: Date = .now
     ) -> DashboardModel {
-        guard let currentId = scope.currentId, let defaultId = scope.defaultId else { return empty }
-        let allAccounts = (try? ctx.fetch(FetchDescriptor<Account>())) ?? []
-        let inScope = allAccounts.filter {
-            scope.includes($0) && CoreLogic.AccountStatus.isCountedInCashNetWorth($0)
-        }
-        if inScope.isEmpty { return empty }
+        guard let currentId = scope.currentId, let defaultId = scope.defaultId,
+              let summary = try? CoreLogic.Dashboard.summary(
+                spaceId: currentId, defaultSpaceId: defaultId, months: 6, now: now, cycle: cycle, in: ctx)
+        else { return empty }
 
-        // Valuation for investment groups, so an included investment account's row agrees
-        // with the hero's Invest figure and the Accounts/Investments tabs.
-        let balances = (try? CoreLogic.Accounts.displayBalancesEur(inScope, in: ctx)) ?? [:]
-
-        struct Bucket { var name: String; var color: String?; var eur: Decimal; var count: Int
-                        var kind: AccountGroupKind?; var sortOrder: Int }
-        var buckets: [String: Bucket] = [:]
-        for a in inScope {
-            let key = a.group?.id.uuidString ?? "ungrouped"
-            if buckets[key] == nil {
-                buckets[key] = Bucket(
-                    name: a.group?.name ?? "Ungrouped", color: a.group?.color,
-                    eur: 0, count: 0, kind: a.group?.kind,
-                    sortOrder: a.group?.sortOrder ?? Int.max
-                )
-            }
-            buckets[key]?.eur += balances[a.id] ?? 0
-            buckets[key]?.count += 1
+        let groups = summary.groups.map { g in
+            GroupBucket(
+                id: g.groupId?.uuidString ?? "ungrouped", name: g.name, colorHex: g.color, eur: g.eur,
+                count: g.count, kind: g.kind, excluded: g.kind == .credit || g.kind == .investment
+            )
         }
 
-        let groups = buckets
-            .sorted { ($0.value.sortOrder, $0.value.name) < ($1.value.sortOrder, $1.value.name) }
-            .map { (key, b) in
-                GroupBucket(
-                    id: key, name: b.name, colorHex: b.color, eur: b.eur, count: b.count,
-                    kind: b.kind, excluded: b.kind == .credit || b.kind == .investment
-                )
-            }
-
-        var cashTotal: Decimal = 0
-        var liabilities: Decimal = 0
-        for g in groups {
-            if g.kind == .credit { liabilities += g.eur }
-            else if g.kind == .investment { continue }
-            else { cashTotal += g.eur }
-        }
-
-        // Investment value ignores `excluded` (investment accounts are typically off cash
-        // net worth but still counted as investments) — same scoping as the Investments tab.
-        let investmentAccounts = (try? CoreLogic.Investments.listAccountsInSpace(
-            spaceId: currentId, defaultSpaceId: defaultId, in: ctx))?.map(\.account) ?? []
-        let investmentValue =
-            (try? CoreLogic.Investments.sumLatestValue(for: investmentAccounts, in: ctx)) ?? 0
-
-        let accountIds = Set(inScope.map { $0.id })
-        let incomeIds = CoreLogic.Dashboard.incomeAccountIds(from: inScope)
-        let flow = (try? CoreLogic.Dashboard.monthlyCashFlow(
-            months: 6, accountIds: accountIds, incomeAccountIds: incomeIds, now: now,
-            cycle: cycle, in: ctx)) ?? []
         let formatter = cycle.startDay == 1 ? monthFormatter : cycleFormatter
-        let cashFlow = flow.map {
+        let cashFlow = summary.flow.map {
             MonthBar(id: $0.monthStart,
                      end: CoreLogic.Dashboard.cycleStart($0.monthStart, cycle: cycle, offset: 1),
                      label: formatter.string(from: $0.monthStart),
@@ -130,9 +86,7 @@ struct DashboardModel {
         let cats = (try? ctx.fetch(FetchDescriptor<CoreModel.Category>())) ?? []
         let catById = Dictionary(uniqueKeysWithValues: cats.map { ($0.id, $0) })
 
-        let breakdown = (try? CoreLogic.Dashboard.categoryBreakdown(
-            accountIds: accountIds, now: now, cycle: cycle, in: ctx)) ?? []
-        let topCategories = breakdown.prefix(5).map { slice -> CategorySlice in
+        let topCategories = summary.breakdown.prefix(5).map { slice -> CategorySlice in
             let cat = slice.categoryId.flatMap { catById[$0] }
             return CategorySlice(
                 id: slice.categoryId?.uuidString ?? "uncategorized",
@@ -158,7 +112,7 @@ struct DashboardModel {
             .map { $0 }
 
         return DashboardModel(
-            cashTotal: cashTotal, liabilities: liabilities, investmentValue: investmentValue,
+            cashTotal: summary.cashTotal, liabilities: summary.liabilities, investmentValue: summary.investmentValue,
             groups: groups, cashFlow: cashFlow, topCategories: topCategories,
             budgets: budgets, hasAccounts: true
         )
