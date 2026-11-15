@@ -65,7 +65,10 @@ struct OdysseyFinanceApp: App {
         if CloudKitGate.isAvailable {
             BackgroundSync.register(engine: engine)
         }
-        BackgroundSync.afterSync = { container in await AutomationRunner.run(container.mainContext) }
+        BackgroundSync.afterSync = { container in
+            await AutomationRunner.run(container.mainContext)
+            await ClaudeBridge.exportSnapshot(container.mainContext)
+        }
         NotificationResponder.shared.container = container
         NotificationResponder.shared.engine = engine
         UNUserNotificationCenter.current().delegate = NotificationResponder.shared
@@ -88,6 +91,7 @@ struct OdysseyFinanceApp: App {
                         // store in the simulator before they are ever pointed at the phone.
                         // Behind the CloudKit gate they could only ever be tested in anger.
                         runDebugRoutines()
+                        await ClaudeBridge.exportSnapshot(modelContainer.mainContext)
                         return
                     }
                     do {
@@ -111,6 +115,7 @@ struct OdysseyFinanceApp: App {
                     // Cold launch: scenePhase never transitions into the initial .active.
                     await ForegroundBankSync.runIfDue(
                         modelContainer.mainContext, engine: syncEngine)
+                    await ClaudeBridge.exportSnapshot(modelContainer.mainContext)
                 }
         }
         .modelContainer(modelContainer)
@@ -188,7 +193,10 @@ struct RootView: View {
                 // Refresh bank data on every foreground (throttled). The BGProcessingTask alone
                 // left the app showing stale transactions until Connections was tapped by hand.
                 if phase == .active {
-                    Task { await ForegroundBankSync.runIfDue(modelContext, engine: syncEngine) }
+                    Task {
+                        await ForegroundBankSync.runIfDue(modelContext, engine: syncEngine)
+                        await ClaudeBridge.exportSnapshot(modelContext)
+                    }
                 }
                 // Face ID's own prompt also takes the scene inactive and back; only a return
                 // from the background asks again, so a cancelled prompt doesn't loop.

@@ -53,7 +53,11 @@ targets:
       properties:
         com.apple.developer.icloud-services:
           - CloudKit
+          - CloudDocuments
         com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.uliseis.odysseyfinance
+        # The same container's iCloud Drive side carries the Claude bridge files (D13).
+        com.apple.developer.ubiquity-container-identifiers:
           - iCloud.com.uliseis.odysseyfinance
         aps-environment: development
         # ASWebAuthenticationSession's https callback only fires if the app is associated
@@ -71,6 +75,8 @@ targets:
         product: CoreIntegrations
       - package: Core
         product: CoreSync
+      - package: Core
+        product: CoreBridge
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.uliseis.odysseyfinance
