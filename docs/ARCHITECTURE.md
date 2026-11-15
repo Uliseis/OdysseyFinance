@@ -82,6 +82,14 @@ An investment account is modelled like a cash account: an **anchor plus everythi
 
 `Recurring.detect` looks for charges with the same merchant and amount on a stable day of the month (occurrences within 5 days of each other). A charge can also be pinned to a fixed day. Automations can book the expected charge on its day, or book a fixed recurring split after each qualifying arrival. Each booking raises an actionable notification (*Keep*, *Delete*, *Stop This Subscription*, *Undo*), so nothing lands silently.
 
+## Claude bridge
+
+Claude works on the data from a Mac through a local MCP server, `Tools/OdysseyMCP`, without a server or a second CloudKit client (D13). The two sides only share files in the app's iCloud Drive container, which the Mac sees at `~/Library/Mobile Documents/iCloud~com~uliseis~odysseyfinance/bridge/`.
+
+- **Snapshot.** On foreground, after a bank sync and after applying commands, the app writes `snapshot.json`: every model as its sync snapshot (full history), plus the per-device settings that change the numbers (pay cycle, selected space, automation settings). The file that leaves the phone has no session ids or tokens, and bank payloads shrink to their transaction code and counterparty names.
+- **Replica.** `CoreBridge` rebuilds a snapshot into an in-memory SwiftData store. The server answers every question by running the app's own CoreLogic on it (balances, Dashboard flow and breakdown, transfer checks), so the Mac and the phone can't disagree. Previews of changes must run on a replica too: CoreLogic saves inside every mutation, so they can never run on a context over the real store.
+- **Policy.** `policy.md` in the same folder holds how the user wants things categorised. It names real people, so it never enters git.
+
 ## Migration from the web app
 
 The app replaced a Next.js + Postgres web app, which is kept read-only under `Spec/`. Migration was a one-shot step:
