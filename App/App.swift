@@ -126,11 +126,8 @@ struct OdysseyFinanceApp: App {
     private func runDebugRoutines() {
         #if DEBUG
         CCStatementImport.runIfRequested(modelContainer)
-        QuickAddSignFix.runIfRequested(modelContainer)
-        InvestmentBasisMigration.runIfRequested(modelContainer)
         EBWatermarkRewind.runIfRequested(modelContainer)
         NettingImport.runIfRequested(modelContainer)
-        FeedAdoptionRun.runIfRequested(modelContainer)
         // OFOPEN_TX=<uuid>: exercise the notification deep link without a notification.
         if let raw = ProcessInfo.processInfo.environment["OFOPEN_TX"], let id = UUID(uuidString: raw) {
             PendingNavigation.shared.transactionId = id
