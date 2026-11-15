@@ -104,9 +104,17 @@ public final class CloudKitSyncEngine {
     // never push. Trigger this exactly once on the cutover launch. Idempotent if repeated:
     // CKSyncEngine dedupes pending changes by recordID and the lastKnownRecord tag makes a
     // re-send a no-op update.
-    // Set by the repair re-push: conflicts tied on the clock keep the device's values. Lasts
-    // until the pending queue drains or the app restarts.
-    public private(set) var preferLocalOnTie = false
+    // Set by the repair re-push: conflicts tied on the clock keep the device's values. Saved,
+    // because the queue outlives the process: an app killed mid-repair must resume it with
+    // the same rule, or a tie would hand a stale server copy back to the device.
+    private static let repairKey = "OFSYNC.repairPushPending"
+    public private(set) var preferLocalOnTie = UserDefaults.standard.bool(forKey: CloudKitSyncEngine.repairKey) {
+        didSet { UserDefaults.standard.set(preferLocalOnTie, forKey: Self.repairKey) }
+    }
+    // Records built per send. Building looks each one up across 14 model types on the main
+    // actor, so building the whole queue at once (thousands, during a repair) froze the app
+    // until iOS killed it. The engine asks again for the rest.
+    static let batchLimit = 200
 
     // preferLocalOnTie: re-push everything so CloudKit picks up fields that were cleared on the
     // device before cleared fields were pushed, without letting a stale server copy win a tie.
@@ -206,7 +214,7 @@ public final class CloudKitSyncEngine {
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let scope = context.options.scope
-        let changes = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }
+        let changes = Array(syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }.prefix(Self.batchLimit))
         if changes.isEmpty, preferLocalOnTie {
             preferLocalOnTie = false
             SyncLog.log("repair: queue drained")
@@ -282,7 +290,7 @@ public final class CloudKitSyncEngine {
             }
             syncEngine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
         case .batchRequestFailed, .serverRejectedRequest, .networkFailure,
-             .networkUnavailable, .serviceUnavailable, .requestRateLimited, .zoneBusy:
+             .networkUnavailable, .serviceUnavailable, .requestRateLimited, .zoneBusy, .operationCancelled:
             syncEngine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])  // transient; retry
         default:
             lastError = ckError
