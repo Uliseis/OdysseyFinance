@@ -51,6 +51,21 @@ public struct BridgeAppState: Codable, Sendable, Equatable {
     public var cycleStartsEarlyOnWeekends: Bool
     public var currentSpaceId: UUID?
     public var automation: Automation
+    // Optional so snapshots written before the write path still decode.
+    public var claude: Claude?
+
+    // How this phone treats change batches, so the server can tell Claude what will happen.
+    public struct Claude: Codable, Sendable, Equatable {
+        public var acceptsChanges: Bool
+        public var trustedKeyIds: [String]
+        public var autoApply: [AutoApplyKind]
+
+        public init(acceptsChanges: Bool = false, trustedKeyIds: [String] = [], autoApply: [AutoApplyKind] = []) {
+            self.acceptsChanges = acceptsChanges
+            self.trustedKeyIds = trustedKeyIds
+            self.autoApply = autoApply
+        }
+    }
 
     public struct Automation: Codable, Sendable, Equatable {
         public var recurringEnabled: Bool
@@ -80,12 +95,13 @@ public struct BridgeAppState: Codable, Sendable, Equatable {
 
     public init(
         cycleStartDay: Int = 1, cycleStartsEarlyOnWeekends: Bool = true,
-        currentSpaceId: UUID? = nil, automation: Automation = .init()
+        currentSpaceId: UUID? = nil, automation: Automation = .init(), claude: Claude? = nil
     ) {
         self.cycleStartDay = cycleStartDay
         self.cycleStartsEarlyOnWeekends = cycleStartsEarlyOnWeekends
         self.currentSpaceId = currentSpaceId
         self.automation = automation
+        self.claude = claude
     }
 
     public var cycle: CoreLogic.Dashboard.Cycle {
