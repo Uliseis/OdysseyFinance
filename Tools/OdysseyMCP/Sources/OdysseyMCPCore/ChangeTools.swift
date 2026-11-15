@@ -125,7 +125,7 @@ extension ToolCatalog {
         } ?? "The phone decides when the app next opens."
         return Self.result(try Self.json(Submitted(
             batchId: batch.id, file: files.inboxFile(batch.id).path, onPhone: expected,
-            next: "Ask the user to open Odyssey Finance on the iPhone, then call change_status with this batchId.")))
+            next: "Ask the user to open Odyssey Finance on the iPhone (iCloud can take a few minutes to deliver the batch, and again to bring back the result), then call change_status with this batchId.")))
     }
 
     private func status(_ args: Arguments) throws -> CallTool.Result {
