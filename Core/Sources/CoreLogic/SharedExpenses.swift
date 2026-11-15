@@ -130,14 +130,16 @@ extension CoreLogic {
             try assertWithinPrimary(total, primaryAmount: primaryAmount)
             try assertSameSpace(primary: primary, others: reimbursements)
 
+            // Inserted before primaryTx is set: on iOS, SwiftData traps on a relationship
+            // between an uninserted model and a persisted one.
             let group = SharedExpenseGroup(
                 label: label,
-                primaryTx: primary,
                 attributionMonth: monthStart(primary.bookedAt),
                 createdAt: now,
                 updatedAt: now
             )
             ctx.insert(group)
+            group.primaryTx = primary
 
             primary.sharedExpenseGroup = group
             for r in reimbursements { r.sharedExpenseGroup = group }
@@ -186,14 +188,16 @@ extension CoreLogic {
                 (lhs.amountEur.map { abs($0) } ?? 0) < (rhs.amountEur.map { abs($0) } ?? 0)
             } ?? expenses[0]
 
+            // Inserted before primaryTx is set: on iOS, SwiftData traps on a relationship
+            // between an uninserted model and a persisted one.
             let group = SharedExpenseGroup(
                 label: label,
-                primaryTx: anchor,
                 attributionMonth: monthStart(anchor.bookedAt),
                 createdAt: now,
                 updatedAt: now
             )
             ctx.insert(group)
+            group.primaryTx = anchor
             credit.sharedExpenseGroup = group
             for e in expenses { e.sharedExpenseGroup = group }
 
