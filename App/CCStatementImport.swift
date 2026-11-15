@@ -36,18 +36,27 @@ enum CCStatementImport {
         // Deleted before inserts, so a row can be replaced under the same externalId. An
         // auto-recurring id is also declined so the automation doesn't re-book it.
         let deleteExternalIds: [String]?
+        // Debit-leg externalIds of pension splits to undo (both legs go, the arrival is
+        // declined), and arrivals to decline up front so the automation never splits them.
+        let undoPensionSplits: [String]?
+        let declinePensionArrivals: [String]?
 
         init(from decoder: Decoder) throws {
             if let bare = try? [Row](from: decoder) {
-                rules = nil; transactions = bare; valuations = nil; deleteExternalIds = nil; return
+                rules = nil; transactions = bare; valuations = nil; deleteExternalIds = nil
+                undoPensionSplits = nil; declinePensionArrivals = nil; return
             }
             let c = try decoder.container(keyedBy: CodingKeys.self)
             rules = try c.decodeIfPresent([RuleSeed].self, forKey: .rules)
             transactions = try c.decodeIfPresent([Row].self, forKey: .transactions) ?? []
             valuations = try c.decodeIfPresent([ValuationSeed].self, forKey: .valuations)
             deleteExternalIds = try c.decodeIfPresent([String].self, forKey: .deleteExternalIds)
+            undoPensionSplits = try c.decodeIfPresent([String].self, forKey: .undoPensionSplits)
+            declinePensionArrivals = try c.decodeIfPresent([String].self, forKey: .declinePensionArrivals)
         }
-        private enum CodingKeys: String, CodingKey { case rules, transactions, valuations, deleteExternalIds }
+        private enum CodingKeys: String, CodingKey {
+            case rules, transactions, valuations, deleteExternalIds, undoPensionSplits, declinePensionArrivals
+        }
     }
 
     struct Row: Decodable {
@@ -137,6 +146,17 @@ enum CCStatementImport {
             }
             if eid.hasPrefix(CoreLogic.Automations.recurringPrefix) { AutomationSettings.declineRecurring(eid) }
         }
+        for eid in payload?.undoPensionSplits ?? [] {
+            guard let debit = (try? ctx.fetch(FetchDescriptor<Transaction>(
+                predicate: #Predicate { $0.externalId == eid })))?.first else { continue }
+            do {
+                if let arrival = try CoreLogic.Automations.undoSplit(debitTxId: debit.id, in: ctx) {
+                    AutomationSettings.declineSplit(arrival)
+                }
+                deleted += 1
+            } catch { print("[CCImport] undo split refused \(eid): \(error)") }
+        }
+        for eid in payload?.declinePensionArrivals ?? [] { AutomationSettings.declineSplit(eid) }
 
         var insertedIds: [UUID] = []
         var skipped = 0
