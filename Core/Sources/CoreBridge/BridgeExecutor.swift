@@ -225,6 +225,109 @@ public enum BridgeExecutor {
                          ?? .deleteValuation(id: saved.id)]
             step.message = prior == nil ? "New valuation" : "Replaces that day's valuation"
 
+        case .importStatement(let accountId, let csv):
+            let account = try fetchOne(Account.self, accountId, "account", in: ctx)
+            let before = Dictionary(uniqueKeysWithValues: try rows(of: accountId, in: ctx).map { ($0.id, $0.externalId) })
+            let summary = try CoreLogic.StatementImport.importCSV(csv, into: account, in: ctx, now: now)
+            let after = try rows(of: accountId, in: ctx)
+            let inserted = after.filter { before[$0.id] == nil }
+            let rekeyed = after.filter { t in before[t.id].map { $0 != t.externalId } ?? false }
+            let unmatched: [BridgeChange] = summary.unmatched.map { u in
+                let day = u.bookedAt.formatted(.iso8601.year().month().day())
+                return BridgeChange(id: u.id, label: "\(day) · \(u.description ?? "quick-add") · \(u.amount)",
+                                    before: "quick-add", after: "no statement row: check it, or delete it with deleteTransactions")
+            }
+            step.changes = inserted.map { change($0, before: nil, after: "new row") }
+                + rekeyed.map { change($0, before: "quick-add", after: "matched to the statement") }
+                + unmatched
+            step.message = "\(summary.parsed) statement rows: \(summary.inserted) new, \(summary.matchedManual) matched to quick-adds, "
+                + "\(summary.skippedDuplicate) already there, \(summary.skippedTransfers) transfers skipped, \(summary.categorized) categorized by rules"
+                + (summary.errors.isEmpty ? "" : ". Unreadable lines: \(summary.errors.joined(separator: "; "))")
+            if summary.inserted + summary.matchedManual == 0 { step.changes = [] }
+
+        case .deleteTransactions(let txIds):
+            let txs = try txIds.map { try transaction($0, in: ctx) }
+            step.changes = txs.map { change($0, before: label($0.category), after: "deleted") }
+            for t in txs { try CoreLogic.Transactions.delete(t, in: ctx) }
+            step.message = "\(txs.count) rows deleted, with any mirrors they had"
+
+        case .adoptFeed(let feedAccountId, let manualAccountId):
+            let feed = try fetchOne(Account.self, feedAccountId, "account", in: ctx)
+            let manual = try fetchOne(Account.self, manualAccountId, "account", in: ctx)
+            let feedName = feed.displayName, manualName = manual.displayName
+            let summary = try CoreLogic.FeedAdoption.adopt(feed: feed, into: manual, in: ctx, now: now)
+            step.changes = [BridgeChange(id: manualAccountId, label: manualName, before: "manual", after: "bank-fed"),
+                            BridgeChange(id: feedAccountId, label: feedName, before: "discovered account", after: "merged and removed")]
+            step.message = "\(summary.rekeyed) rows matched to manual ones, \(summary.mirrorsReplaced) route mirrors replaced by the real leg, "
+                + "\(summary.moved) moved, \(summary.keptManualOnly) manual rows with no bank twin kept"
+
+        case .undoPensionSplit(let debitTxId):
+            let debit = try transaction(debitTxId, in: ctx)
+            guard try CoreLogic.Automations.splitSource(of: debit, in: ctx) != nil else {
+                throw BridgeExecutorError.invalid("Not a pension split leg")
+            }
+            let legs = debit.transferGroup?.transactions ?? [debit]
+            step.changes = legs.map { change($0, before: "pension split", after: "deleted") }
+            try CoreLogic.Automations.undoSplit(debitTxId: debitTxId, in: ctx)
+            step.message = "Both legs removed; the arrival is remembered so it isn't split again"
+
+        case .createRoute(let pattern, let targetId, let sourceId, let field, let match, let direction, let priority):
+            let target = try fetchOne(Account.self, targetId, "account", in: ctx)
+            let source = try sourceId.map { try fetchOne(Account.self, $0, "account", in: ctx) }
+            let mirrors = try mirrorChanges(in: ctx) {
+                try CoreLogic.TransferRoutes.createRoute(
+                    pattern: pattern, target: target, source: source, field: field, matchType: match,
+                    direction: direction, priority: priority, in: ctx, now: now)
+            }
+            step.changes = [BridgeChange(id: nil, label: "\(field.rawValue) \(match.rawValue) \"\(pattern)\" → \(target.displayName)",
+                                         before: nil, after: "route")] + mirrors
+            step.message = "New route; \(mirrors.count) mirror rows booked on \(target.displayName) for past matches"
+
+        case .updateRoute(let routeId, let pattern, let targetId, let sourceId, let field, let match, let direction, let enabled):
+            let route = try fetchOne(TransferRoute.self, routeId, "route", in: ctx)
+            guard let currentTarget = route.targetAccount else { throw BridgeExecutorError.invalid("The route has no target account") }
+            let target = try targetId.map { try fetchOne(Account.self, $0, "account", in: ctx) } ?? currentTarget
+            let source = try sourceId.map { try fetchOne(Account.self, $0, "account", in: ctx) } ?? route.sourceAccount
+            let before = routeLabel(route)
+            let mirrors = try mirrorChanges(in: ctx) {
+                try CoreLogic.TransferRoutes.updateRoute(
+                    route, pattern: pattern ?? route.pattern, target: target, source: source, field: field ?? route.field,
+                    matchType: match ?? route.matchType, direction: direction ?? route.direction,
+                    enabled: enabled ?? route.enabled, in: ctx, now: now)
+            }
+            let after = routeLabel(route)
+            if before == after && mirrors.isEmpty {
+                step.message = "Route unchanged"
+                return
+            }
+            step.changes = [BridgeChange(id: routeId, label: "route", before: before, after: after)] + mirrors
+            step.message = "Route updated: \(mirrors.filter { $0.after == "deleted" }.count) mirrors removed, "
+                + "\(mirrors.filter { $0.before == nil }.count) booked"
+
+        case .deleteRoute(let routeId):
+            let route = try fetchOne(TransferRoute.self, routeId, "route", in: ctx)
+            let label = routeLabel(route)
+            let mirrors = try mirrorChanges(in: ctx) { try CoreLogic.TransferRoutes.deleteRoute(route, in: ctx) }
+            step.changes = [BridgeChange(id: routeId, label: label, before: "route", after: "deleted")] + mirrors
+            step.message = "Route deleted with its \(mirrors.count) mirror rows; their source rows count as spending again"
+
+        case .requestBankSync(let connectionIds):
+            let all = try ctx.fetch(FetchDescriptor<Connection>()).filter { $0.connector == .enablebanking }
+            let chosen = try connectionIds.map { ids in try ids.map { try fetchOne(Connection.self, $0, "connection", in: ctx) } } ?? all
+            step.changes = chosen.map {
+                BridgeChange(id: $0.id, label: $0.institutionName ?? "bank",
+                             before: $0.lastSyncAt.map { "last synced \($0.formatted(.iso8601))" }, after: "sync requested")
+            }
+            step.undo = []
+            step.message = "The phone syncs these banks after this batch"
+
+        case .requestReconnect(let connectionId):
+            let connection = try fetchOne(Connection.self, connectionId, "connection", in: ctx)
+            step.changes = [BridgeChange(id: connectionId, label: connection.institutionName ?? "bank",
+                                         before: connection.expiresAt.map { "consent until \($0.formatted(.iso8601.year().month().day()))" },
+                                         after: "reconnect screen opens")]
+            step.message = "Approving opens this bank's connection screen; you finish the reconnect with the bank"
+
         case .restoreCategories(let restores):
             for r in restores {
                 let t = try transaction(r.txId, in: ctx)
@@ -283,9 +386,30 @@ public enum BridgeExecutor {
         return category
     }
 
+    private static func rows(of accountId: UUID, in ctx: ModelContext) throws -> [Transaction] {
+        try ctx.fetch(FetchDescriptor<Transaction>(predicate: #Predicate { $0.account?.id == accountId }))
+    }
+
+    // Mirror rows booked and removed by a route change, labelled before they go.
+    private static func mirrorChanges(in ctx: ModelContext, _ body: () throws -> Any) throws -> [BridgeChange] {
+        func mirrors() throws -> [UUID: Transaction] {
+            Dictionary(uniqueKeysWithValues: try ctx.fetch(FetchDescriptor<Transaction>()).filter { $0.routedFromTx != nil }.map { ($0.id, $0) })
+        }
+        let before = try mirrors().mapValues { change($0, before: "mirror", after: "deleted") }
+        _ = try body()
+        let after = try mirrors()
+        return before.filter { after[$0.key] == nil }.values.sorted { $0.label < $1.label }
+            + after.filter { before[$0.key] == nil }.values.map { change($0, before: nil, after: "mirror") }.sorted { $0.label < $1.label }
+    }
+
     // MARK: - labels
 
     private static func label(_ category: CoreModel.Category?) -> String { category?.name ?? "Uncategorized" }
+
+    private static func routeLabel(_ route: TransferRoute) -> String {
+        "\(route.field.rawValue) \(route.matchType.rawValue) \"\(route.pattern)\" → \(route.targetAccount?.displayName ?? "?")"
+            + (route.direction.map { " (\($0.rawValue)s)" } ?? "") + (route.enabled ? "" : ", disabled")
+    }
 
     private static func ruleLabel(_ rule: CategoryRule) -> String {
         "\(rule.field.rawValue) \(rule.matchType.rawValue) \"\(rule.pattern)\" → \(label(rule.category))"
