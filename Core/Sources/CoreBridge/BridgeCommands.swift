@@ -52,6 +52,11 @@ public enum BridgeOp: Sendable, Equatable {
     // Asks the phone to do what only it can (bank keys and SCA live there); no data changes here.
     case requestBankSync(connectionIds: [UUID]?)
     case requestReconnect(connectionId: UUID)
+    case createTransaction(accountId: UUID, amount: Decimal, bookedAt: Date, description: String?, counterparty: String?,
+                           category: String?)
+    case mirrorTransfer(sourceTxId: UUID, targetAccountId: UUID)
+    case createSharedGroupFromCredit(label: String, creditTxId: UUID, expenseTxIds: [UUID])
+    case archiveAccount(accountId: UUID, archived: Bool)
     // Only the phone builds these, to undo an auto-applied batch. Never accepted from the inbox.
     case restoreCategories([CategoryRestore])
     case deleteCategory(id: UUID)
@@ -79,6 +84,10 @@ public enum BridgeOp: Sendable, Equatable {
         case .deleteRoute: "deleteRoute"
         case .requestBankSync: "requestBankSync"
         case .requestReconnect: "requestReconnect"
+        case .createTransaction: "createTransaction"
+        case .mirrorTransfer: "mirrorTransfer"
+        case .createSharedGroupFromCredit: "createSharedGroupFromCredit"
+        case .archiveAccount: "archiveAccount"
         case .restoreCategories: "restoreCategories"
         case .deleteCategory: "deleteCategory"
         case .deleteValuation: "deleteValuation"
@@ -89,7 +98,8 @@ public enum BridgeOp: Sendable, Equatable {
     // its whole batch, so Claude keeps these in batches of their own.
     public var isUndoable: Bool {
         switch self {
-        case .categorize, .createCategory, .createRule, .applyRules, .recordValuation, .requestBankSync, .requestReconnect: true
+        case .categorize, .createCategory, .createRule, .applyRules, .recordValuation, .requestBankSync, .requestReconnect,
+             .createTransaction, .mirrorTransfer, .archiveAccount: true
         default: false
         }
     }
@@ -128,6 +138,8 @@ extension BridgeOp: Codable {
         case cashValueEur, notes, restores, id
         case csv, feedAccountId, manualAccountId, debitTxId, targetAccountId, sourceAccountId, direction, routeId
         case enabled, connectionIds, connectionId
+        case amount, bookedAt, counterparty, sourceTxId, creditTxId, expenseTxIds, archived
+        case descriptionText = "description"
     }
 
     public init(from decoder: Decoder) throws {
@@ -206,6 +218,23 @@ extension BridgeOp: Codable {
             self = .requestBankSync(connectionIds: try c.decodeIfPresent([UUID].self, forKey: .connectionIds))
         case "requestReconnect":
             self = .requestReconnect(connectionId: try c.decode(UUID.self, forKey: .connectionId))
+        case "createTransaction":
+            self = .createTransaction(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                      amount: try c.decode(Decimal.self, forKey: .amount),
+                                      bookedAt: try c.decode(Date.self, forKey: .bookedAt),
+                                      description: try c.decodeIfPresent(String.self, forKey: .descriptionText),
+                                      counterparty: try c.decodeIfPresent(String.self, forKey: .counterparty),
+                                      category: try c.decodeIfPresent(String.self, forKey: .category))
+        case "mirrorTransfer":
+            self = .mirrorTransfer(sourceTxId: try c.decode(UUID.self, forKey: .sourceTxId),
+                                   targetAccountId: try c.decode(UUID.self, forKey: .targetAccountId))
+        case "createSharedGroupFromCredit":
+            self = .createSharedGroupFromCredit(label: try c.decode(String.self, forKey: .label),
+                                                creditTxId: try c.decode(UUID.self, forKey: .creditTxId),
+                                                expenseTxIds: try c.decode([UUID].self, forKey: .expenseTxIds))
+        case "archiveAccount":
+            self = .archiveAccount(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                   archived: try c.decodeIfPresent(Bool.self, forKey: .archived) ?? true)
         case "restoreCategories":
             self = .restoreCategories(try c.decode([CategoryRestore].self, forKey: .restores))
         case "deleteCategory":
@@ -293,6 +322,23 @@ extension BridgeOp: Codable {
             try c.encodeIfPresent(connectionIds, forKey: .connectionIds)
         case .requestReconnect(let connectionId):
             try c.encode(connectionId, forKey: .connectionId)
+        case .createTransaction(let accountId, let amount, let bookedAt, let description, let counterparty, let category):
+            try c.encode(accountId, forKey: .accountId)
+            try c.encode(amount, forKey: .amount)
+            try c.encode(bookedAt, forKey: .bookedAt)
+            try c.encodeIfPresent(description, forKey: .descriptionText)
+            try c.encodeIfPresent(counterparty, forKey: .counterparty)
+            try c.encodeIfPresent(category, forKey: .category)
+        case .mirrorTransfer(let source, let target):
+            try c.encode(source, forKey: .sourceTxId)
+            try c.encode(target, forKey: .targetAccountId)
+        case .createSharedGroupFromCredit(let label, let credit, let expenses):
+            try c.encode(label, forKey: .label)
+            try c.encode(credit, forKey: .creditTxId)
+            try c.encode(expenses, forKey: .expenseTxIds)
+        case .archiveAccount(let accountId, let archived):
+            try c.encode(accountId, forKey: .accountId)
+            try c.encode(archived, forKey: .archived)
         case .restoreCategories(let restores):
             try c.encode(restores, forKey: .restores)
         case .deleteCategory(let id), .deleteValuation(let id):

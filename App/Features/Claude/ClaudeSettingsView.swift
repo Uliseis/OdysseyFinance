@@ -179,7 +179,7 @@ struct ClaudeResultView: View {
                 }
             }
         } message: {
-            Text("Rows go back to their previous category, and categories, rules and valuations it created are removed.")
+            Text("Reverses every change in the batch: categories go back, and anything it created is removed.")
         }
     }
 

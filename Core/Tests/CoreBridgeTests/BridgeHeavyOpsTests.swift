@@ -144,6 +144,77 @@ final class BridgeHeavyOpsTests: XCTestCase {
         XCTAssertNil(run(mixed, f).undo)
     }
 
+    func test_createTransaction_onManualAccountsOnly_runsRules_replaysAsNoChange_andUndoes() throws {
+        let f = try BridgeFixture()
+        let op = BridgeOp.createTransaction(accountId: f.card.id, amount: -12, bookedAt: BridgeFixture.day(-1),
+                                            description: "SAMPLE MARKET 02", counterparty: nil, category: nil)
+        let created = run([op], f)
+        XCTAssertEqual(created.ops.first?.status, .applied, "\(created.ops)")
+        let row = try XCTUnwrap(f.ctx.fetch(FetchDescriptor<Transaction>()).first { $0.transactionDescription == "SAMPLE MARKET 02" })
+        XCTAssertEqual(row.amount, -12)
+        XCTAssertEqual(row.direction, .debit)
+        XCTAssertEqual(row.category?.name, "Groceries", "the existing rule files it")
+        XCTAssertTrue(row.externalId.hasPrefix("manual-tx:"), "statement imports match quick-add rows")
+
+        XCTAssertEqual(run([op], f).ops.first?.status, .skipped)
+        XCTAssertEqual(run([.createTransaction(accountId: f.checking.id, amount: 5, bookedAt: BridgeFixture.day(0),
+                                               description: "x", counterparty: nil, category: nil)], f).ops.first?.status, .failed)
+
+        let reverted = run(try XCTUnwrap(created.undo), f)
+        XCTAssertEqual(reverted.failedCount, 0)
+        XCTAssertNil(try f.ctx.fetch(FetchDescriptor<Transaction>()).first { $0.transactionDescription == "SAMPLE MARKET 02" })
+    }
+
+    func test_mirrorTransfer_booksALegOnAManualAccount_andUndoRemovesIt() throws {
+        let f = try BridgeFixture()
+        let outcome = run([.mirrorTransfer(sourceTxId: f.bankRow.id, targetAccountId: f.savings.id)], f)
+        XCTAssertEqual(outcome.ops.first?.status, .applied, "\(outcome.ops)")
+        XCTAssertEqual(f.bankRow.mirrors.count, 1)
+        XCTAssertTrue(f.bankRow.isTransfer)
+        XCTAssertEqual(run([.mirrorTransfer(sourceTxId: f.bankRow.id, targetAccountId: f.savings.id)], f).ops.first?.status, .skipped)
+
+        _ = run(try XCTUnwrap(outcome.undo), f)
+        XCTAssertTrue(f.bankRow.mirrors.isEmpty)
+        XCTAssertFalse(f.bankRow.isTransfer)
+    }
+
+    func test_sharedGroupFromCredit_andArchiving() throws {
+        let f = try BridgeFixture()
+        let credit = try XCTUnwrap(f.ctx.fetch(FetchDescriptor<Transaction>()).first { $0.transactionDescription == "UNKNOWN CREDIT" })
+        let expense = try XCTUnwrap(f.ctx.fetch(FetchDescriptor<Transaction>()).first { $0.transactionDescription == "EXAMPLE BISTRO" })
+        let grouped = run([.createSharedGroupFromCredit(label: "Bistro split", creditTxId: credit.id, expenseTxIds: [expense.id])], f)
+        XCTAssertEqual(grouped.ops.first?.status, .applied, "\(grouped.ops)")
+        XCTAssertNotNil(credit.sharedExpenseGroup)
+        XCTAssertNil(grouped.undo)
+
+        let archived = run([.archiveAccount(accountId: f.broker.id, archived: true)], f)
+        XCTAssertEqual(archived.ops.first?.status, .applied)
+        XCTAssertTrue(f.broker.archived)
+        _ = run(try XCTUnwrap(archived.undo), f)
+        XCTAssertFalse(f.broker.archived)
+    }
+
+    func test_previewListsEveryPastCycleItMoves() throws {
+        let f = try BridgeFixture()
+        let old = Transaction(account: f.checking, externalId: "old-credit", bookedAt: BridgeFixture.day(-45),
+                              amount: 15, currency: "EUR", amountEur: 15, direction: .credit, description: "OLD REFUND")
+        f.ctx.insert(old)
+        // Something to offset: a credit never takes a category's spending below zero.
+        f.ctx.insert(Transaction(account: f.checking, externalId: "old-shop", bookedAt: BridgeFixture.day(-44),
+                                 amount: -40, currency: "EUR", amountEur: -40, direction: .debit, description: "OLD SHOP",
+                                 category: f.groceries, categorySource: .manual))
+        try f.ctx.save()
+        let replica = try BridgeReplica(BridgeExport.make(in: f.ctx, appState: BridgeFixture.appState, redact: false, now: now))
+        let preview = try replica.preview(BridgeBatch(summary: "", ops: [.categorize(txIds: [old.id], category: "Groceries")]), now: now)
+
+        let month = try XCTUnwrap(preview.months.first, "\(preview.months)")
+        XCTAssertEqual(preview.months.count, 1)
+        XCTAssertLessThan(month.end, BridgeFixture.day(-15), "a past cycle, not the current one")
+        XCTAssertEqual(month.incomeBefore - month.incomeAfter, 15, "an uncategorized credit stops counting as income")
+        XCTAssertEqual(month.expenseBefore - month.expenseAfter, 15, "and offsets that month's spending instead")
+        XCTAssertEqual(preview.before.cycleNet, preview.after.cycleNet)
+    }
+
     func test_newOpsRoundTripThroughJSON() throws {
         let ops: [BridgeOp] = [
             .importStatement(accountId: UUID(), csv: statement), .deleteTransactions(txIds: [UUID()]),
@@ -153,6 +224,11 @@ final class BridgeHeavyOpsTests: XCTestCase {
             .updateRoute(routeId: UUID(), pattern: nil, targetAccountId: UUID(), sourceAccountId: nil, field: nil, match: nil,
                          direction: nil, enabled: false),
             .deleteRoute(routeId: UUID()), .requestBankSync(connectionIds: nil), .requestReconnect(connectionId: UUID()),
+            .createTransaction(accountId: UUID(), amount: Decimal(string: "-12.34")!, bookedAt: now, description: "x",
+                               counterparty: "y", category: "Groceries"),
+            .mirrorTransfer(sourceTxId: UUID(), targetAccountId: UUID()),
+            .createSharedGroupFromCredit(label: "z", creditTxId: UUID(), expenseTxIds: [UUID()]),
+            .archiveAccount(accountId: UUID(), archived: false),
         ]
         let batch = BridgeBatch(summary: "all", ops: ops)
         XCTAssertEqual(try BridgeCoding.decoder().decode(BridgeBatch.self, from: BridgeCoding.encoder().encode(batch)), batch)

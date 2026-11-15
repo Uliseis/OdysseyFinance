@@ -58,7 +58,9 @@ public final class ToolCatalog {
              Income and spending per pay cycle, oldest first, exactly as the Dashboard computes them: \
              transfers and shared-group members are skipped, a group's net counts under its primary's \
              category, a credit in a non-income category offsets spending, an uncategorized credit counts \
-             as income. Recategorizing never changes income − spending; pairing transfers does.
+             as income. Recategorizing moves a credit between income and offset spending, so income − spending \
+             stays put, except in a cycle whose credits outweigh its spending (spending is floored at zero). \
+             Pairing transfers and mirrors do change it.
              """,
              ["months": integer("Number of cycles, default 6."),
               "spaceId": uuid("Space; defaults to the one selected on the phone.")]),

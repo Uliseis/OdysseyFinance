@@ -33,9 +33,16 @@ extension ToolCatalog {
             deleteRoute {routeId} (editing, disabling or deleting a route deletes its mirrors; the preview lists them)
             - requestBankSync {connectionIds?} (the phone syncs those banks, or all, after the batch) · \
             requestReconnect {connectionId} (opens that bank's screen so the user can renew consent)
+            - createTransaction {accountId, amount (signed: debits negative), bookedAt, description?, counterparty?, \
+            category?} (manual accounts only; recorded like a quick-add, so a later statement import matches it)
+            - mirrorTransfer {sourceTxId, targetAccountId} (a one-off mirror leg on a manual account, no route)
+            - createSharedGroupFromCredit {label, creditTxId, expenseTxIds} (a payback that covers several expenses)
+            - archiveAccount {accountId, archived (default true)}
+            categorize marks rows as set by hand, so rules never refile them later. For a merchant that recurs, \
+            prefer createRule plus applyRules; keep categorize for one-off rows.
             Categories are referenced by name, records by id from the read tools.
-            Undo: categorize, createCategory, createRule, applyRules, recordValuation and the two requests can be \
-            undone from the phone. Everything else can't, and one such op takes Undo away from its whole batch, so \
+            Undo: categorize, createCategory, createRule, applyRules, recordValuation, createTransaction, \
+            mirrorTransfer, archiveAccount and the two requests can be undone from the phone. Everything else can't, and one such op takes Undo away from its whole batch, so \
             send those in a batch of their own. The preview's "undoable" says which you have.
             """,
              inputSchema: .object([
@@ -49,7 +56,8 @@ extension ToolCatalog {
                                 "categorize", "createCategory", "createRule", "updateRule", "deleteRule", "applyRules",
                                 "pairTransfer", "unpairTransfer", "createSharedGroup", "deleteSharedGroup", "recordValuation",
                                 "importStatement", "deleteTransactions", "adoptFeed", "undoPensionSplit", "createRoute",
-                                "updateRoute", "deleteRoute", "requestBankSync", "requestReconnect"]]),
+                                "updateRoute", "deleteRoute", "requestBankSync", "requestReconnect", "createTransaction",
+                                "mirrorTransfer", "createSharedGroupFromCredit", "archiveAccount"]]),
                             "txIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
                             "txId": uuid("Transaction id."), "category": string("Category name."),
                             "name": string("New category name."), "kind": string("Category kind."),
@@ -71,6 +79,12 @@ extension ToolCatalog {
                             "direction": string("debit or credit."), "enabled": bool("Route on or off."),
                             "connectionIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
                             "connectionId": uuid("Bank connection id."),
+                            "amount": number("Signed amount in the account's currency; debits negative."),
+                            "bookedAt": date("Booking date (YYYY-MM-DD or ISO 8601)."),
+                            "description": string("Row description."), "counterparty": string("Counterparty."),
+                            "sourceTxId": uuid("Bank row to mirror."), "creditTxId": uuid("The payback credit."),
+                            "expenseTxIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
+                            "archived": bool("Archive (true) or restore (false)."),
                         ]),
                     ])]),
                 ]),
@@ -130,7 +144,7 @@ extension ToolCatalog {
         drafts[batch.id] = Draft(batch: batch, autoApplyKinds: preview.outcome.autoApplyKinds)
         return Self.result(try Self.json(Proposal(
             draftId: batch.id, asOf: base.snapshot.exportedAt, before: preview.before, after: preview.after,
-            undoable: preview.outcome.undo != nil, ops: preview.outcome.ops.map(OpView.init), onPhone: try expectation(preview.outcome.autoApplyKinds, base.snapshot))))
+            monthsChanged: preview.months, undoable: preview.outcome.undo != nil, ops: preview.outcome.ops.map(OpView.init), onPhone: try expectation(preview.outcome.autoApplyKinds, base.snapshot))))
     }
 
     private func submit(_ args: Arguments) throws -> CallTool.Result {
@@ -239,7 +253,7 @@ extension ToolCatalog {
     struct Draft { let batch: BridgeBatch; let autoApplyKinds: [AutoApplyKind]? }
     struct Proposal: Encodable {
         let draftId: UUID; let asOf: Date; let before: BridgeEffect; let after: BridgeEffect
-        let undoable: Bool; let ops: [OpView]; let onPhone: String
+        let monthsChanged: [MonthChange]; let undoable: Bool; let ops: [OpView]; let onPhone: String
     }
     struct OpView: Encodable {
         let index: Int; let op: String; let status: OpOutcome.Status; let message: String

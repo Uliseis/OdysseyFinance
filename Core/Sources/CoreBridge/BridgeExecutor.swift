@@ -329,6 +329,69 @@ public enum BridgeExecutor {
             step.undo = []
             step.message = "Approving opens this bank's connection screen; you finish the reconnect with the bank"
 
+        case .createTransaction(let accountId, let amount, let bookedAt, let description, let counterparty, let categoryName):
+            let account = try fetchOne(Account.self, accountId, "account", in: ctx)
+            guard CoreLogic.Accounts.isManual(account) else {
+                throw BridgeExecutorError.invalid("\(account.displayName) is bank-fed; only manual accounts take rows by hand")
+            }
+            guard amount != 0 else { throw BridgeExecutorError.invalid("amount can't be zero") }
+            let target = try categoryName.map { try category(named: $0, in: ctx) }
+            let text = description?.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The same row sent again in a new batch is left alone.
+            if let twin = try rows(of: accountId, in: ctx).first(where: {
+                $0.amount == amount && $0.bookedAt == bookedAt && $0.transactionDescription == text
+            }) {
+                step.message = "Already there: \(change(twin, before: nil, after: nil).label)"
+                return
+            }
+            let created = try CoreLogic.Transactions.createManual(
+                account: account, amount: abs(amount), direction: amount < 0 ? .debit : .credit, bookedAt: bookedAt,
+                description: text, counterparty: counterparty, category: target, in: ctx, now: now)
+            if target == nil { try CoreLogic.Categorize.applyRulesToTransactions(in: ctx, txIds: [created.id]) }
+            step.changes = [change(created, before: nil, after: "new row, \(label(created.category))")]
+            step.undo = [.deleteTransactions(txIds: [created.id])]
+            step.message = "Recorded like a quick-add, so a later statement import matches it"
+
+        case .mirrorTransfer(let sourceTxId, let targetAccountId):
+            let source = try transaction(sourceTxId, in: ctx)
+            let target = try fetchOne(Account.self, targetAccountId, "account", in: ctx)
+            guard CoreLogic.Accounts.isManual(target) else {
+                throw BridgeExecutorError.invalid("\(target.displayName) is bank-fed: pair the real legs instead")
+            }
+            if source.mirrors.contains(where: { $0.account?.id == targetAccountId }) {
+                step.message = "Already mirrored on \(target.displayName)"
+                return
+            }
+            guard let result = try CoreLogic.TransferRoutes.createMirror(from: source, to: target, in: ctx),
+                  let mirror = try? transaction(result.mirrorId, in: ctx) else {
+                step.message = "No mirror needed: \(target.displayName) gets this from its bank feed, or the row can't be mirrored"
+                return
+            }
+            step.changes = [change(source, before: nil, after: "transfer"), change(mirror, before: nil, after: "mirror")]
+            step.undo = [.unpairTransfer(txId: sourceTxId)]
+            step.message = "Mirror leg booked on \(target.displayName); both legs leave income and spending"
+
+        case .createSharedGroupFromCredit(let groupLabel, let creditTxId, let expenseTxIds):
+            let credit = try transaction(creditTxId, in: ctx)
+            let expenses = try expenseTxIds.map { try transaction($0, in: ctx) }
+            try CoreLogic.SharedExpenses.createGroupFromCredit(
+                .init(label: groupLabel, creditTxId: creditTxId, expenseTxIds: expenseTxIds), in: ctx, now: now)
+            step.changes = [change(credit, before: label(credit.category), after: "repays \(groupLabel)")]
+                + expenses.map { change($0, before: nil, after: "shared: \(groupLabel)") }
+            step.message = "The credit nets against those expenses instead of counting as income"
+
+        case .archiveAccount(let accountId, let archived):
+            let account = try fetchOne(Account.self, accountId, "account", in: ctx)
+            guard account.archived != archived else {
+                step.message = archived ? "Already archived" : "Not archived"
+                return
+            }
+            try CoreLogic.Accounts.setArchived(account, archived, in: ctx, now: now)
+            step.changes = [BridgeChange(id: accountId, label: account.displayName,
+                                         before: archived ? "active" : "archived", after: archived ? "archived" : "active")]
+            step.undo = [.archiveAccount(accountId: accountId, archived: !archived)]
+            step.message = archived ? "Hidden from lists and totals; its bank no longer syncs it" : "Back in lists and totals"
+
         case .restoreCategories(let restores):
             for r in restores {
                 let t = try transaction(r.txId, in: ctx)
@@ -433,19 +496,48 @@ public struct BridgeEffect: Codable, Sendable, Equatable {
     public var uncategorized: Int
 }
 
+// A pay cycle whose income or spending the batch changes.
+public struct MonthChange: Codable, Sendable, Equatable {
+    public var start: Date
+    public var end: Date
+    public var incomeBefore: Decimal
+    public var incomeAfter: Decimal
+    public var expenseBefore: Decimal
+    public var expenseAfter: Decimal
+}
+
 public struct BatchPreview: Codable, Sendable, Equatable {
     public var outcome: BatchOutcome
     public var before: BridgeEffect
     public var after: BridgeEffect
+    // Every cycle that moves, oldest first: route edits and transfer pairing reach back in time.
+    public var months: [MonthChange] = []
 }
 
 @MainActor
 extension BridgeReplica {
     // Applies the batch to this replica, so build a fresh replica for every preview.
     public func preview(_ batch: BridgeBatch, now: Date = .now) throws -> BatchPreview {
+        let span = try cyclesOfHistory(now: now)
         let before = try effect(now: now)
+        let flowBefore = try monthlyFlow(months: span, now: now)
         let outcome = BridgeExecutor.run(batch, in: context, now: now)
-        return BatchPreview(outcome: outcome, before: before, after: try effect(now: now))
+        let flowAfter = Dictionary(try monthlyFlow(months: span, now: now).map { ($0.start, $0) }, uniquingKeysWith: { a, _ in a })
+        let months = flowBefore.compactMap { old -> MonthChange? in
+            guard let new = flowAfter[old.start], new.income != old.income || new.expense != old.expense else { return nil }
+            return MonthChange(start: old.start, end: old.end, incomeBefore: old.income, incomeAfter: new.income,
+                               expenseBefore: old.expense, expenseAfter: new.expense)
+        }
+        return BatchPreview(outcome: outcome, before: before, after: try effect(now: now), months: months)
+    }
+
+    // From the oldest row to now, so a change to any past cycle shows up.
+    private func cyclesOfHistory(now: Date) throws -> Int {
+        var oldest = FetchDescriptor<Transaction>(sortBy: [SortDescriptor(\.bookedAt)])
+        oldest.fetchLimit = 1
+        guard let first = try context.fetch(oldest).first?.bookedAt else { return 1 }
+        let months = Calendar(identifier: .gregorian).dateComponents([.month], from: first, to: now).month ?? 0
+        return min(max(months + 2, 1), 240)
     }
 
     func effect(now: Date) throws -> BridgeEffect {
