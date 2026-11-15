@@ -185,7 +185,7 @@ enum CCStatementImport {
 
         if let csv {
             do {
-                let s = try CoreLogic.StatementImport.importRevolutCSV(csv, into: account, in: ctx)
+                let s = try CoreLogic.StatementImport.importCSV(csv, into: account, in: ctx)
                 print("[CCImport] csv parsed=\(s.parsed) inserted=\(s.inserted) matched=\(s.matchedManual) dup=\(s.skippedDuplicate) transfers=\(s.skippedTransfers) categorized=\(s.categorized) errors=\(s.errors)")
                 try? FileManager.default.removeItem(at: csvURL)
             } catch {

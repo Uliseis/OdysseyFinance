@@ -31,7 +31,7 @@ final class StatementImportTests: XCTestCase {
             account: card, amount: 14, bookedAt: date("2026-08-03T22:40:59Z"),
             description: "Bar El Olivo", in: ctx)
 
-        let summary = try CoreLogic.StatementImport.importRevolutCSV(csv, into: card, in: ctx)
+        let summary = try CoreLogic.StatementImport.importCSV(csv, into: card, in: ctx)
 
         XCTAssertEqual(summary.parsed, 4)
         XCTAssertEqual(summary.skippedTransfers, 1)
@@ -51,7 +51,7 @@ final class StatementImportTests: XCTestCase {
         XCTAssertEqual(all[2].category?.id, subs.id)
 
         // Re-import is a no-op.
-        let again = try CoreLogic.StatementImport.importRevolutCSV(csv, into: card, in: ctx)
+        let again = try CoreLogic.StatementImport.importCSV(csv, into: card, in: ctx)
         XCTAssertEqual(again.skippedDuplicate, 3)
         XCTAssertEqual(again.inserted, 0)
         XCTAssertEqual(again.matchedManual, 0)
@@ -63,7 +63,7 @@ final class StatementImportTests: XCTestCase {
         let conn = Connection(connector: .enablebanking, institutionId: "x", institutionName: "X")
         ctx.insert(conn)
         let bank = S.makeAccount(ctx, name: "Bank", connection: conn)
-        XCTAssertThrowsError(try CoreLogic.StatementImport.importRevolutCSV(csv, into: bank, in: ctx)) {
+        XCTAssertThrowsError(try CoreLogic.StatementImport.importCSV(csv, into: bank, in: ctx)) {
             XCTAssertEqual($0 as? CoreLogic.StatementImport.ImportError, .notManualAccount)
         }
     }
@@ -82,11 +82,55 @@ final class StatementImportTests: XCTestCase {
         _ = try CoreLogic.Transactions.createManual(
             account: card, amount: 7, bookedAt: date("2026-08-20T10:00:00Z"), in: ctx)
 
-        let summary = try CoreLogic.StatementImport.importRevolutCSV(csv, into: card, in: ctx)
+        let summary = try CoreLogic.StatementImport.importCSV(csv, into: card, in: ctx)
 
         XCTAssertTrue(auto.externalId.hasPrefix("revolutcsv:v1:2026-08-12:-4.99"))
         XCTAssertEqual(summary.unmatched.map(\.id), [ghost.id])
         try CoreLogic.StatementImport.deleteUnmatched(ids: summary.unmatched.map(\.id), in: ctx)
+        XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<Transaction>()), 4)
+    }
+
+    func testAmexKeepsTapTimeInsertsCreditsAndSkipsRoutedPayment() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let card = try CoreLogic.Accounts.createManual(
+            name: "Charge Card", institution: "American Express", currency: "EUR", space: space, in: ctx)
+        let tap = date("2026-03-14T19:45:00Z")
+        let quick = try CoreLogic.Transactions.createManual(
+            account: card, amount: Decimal(string: "12.50")!, bookedAt: tap, description: "Grocer", in: ctx)
+        // The paying bank's transfer route already mirrored the card payment onto the card.
+        _ = S.makeTx(ctx, account: card, amount: 300, direction: .credit, bookedAt: date("2026-03-20T08:00:00Z"),
+                     externalId: CoreLogic.TransferRoutes.mirrorExternalId(UUID()))
+        try ctx.save()
+        let csv = """
+        Fecha,Descripción,Importe,Aparece en su Estado de Cuenta como,Referencia,Categoría
+        14/03/2026,SAMPLE GROCER,"12,50",SAMPLE GROCER,'REF1',Productos-Comestibles
+        15/03/2026,EXAMPLE STORE,"40,00",EXAMPLE STORE,'REF2',Productos-Otros Productos
+        16/03/2026,EXAMPLE STORE,"-10,00",EXAMPLE STORE,'REF3',Productos-Otros Productos
+        21/03/2026,PAYMENT,"-300,00",PAYMENT,'REF4',
+        """
+
+        let summary = try CoreLogic.StatementImport.importCSV(csv, into: card, in: ctx)
+
+        XCTAssertEqual(summary.parsed, 4)
+        XCTAssertEqual(summary.matchedManual, 1)
+        XCTAssertEqual(summary.inserted, 2)
+        XCTAssertEqual(summary.skippedTransfers, 1)
+        XCTAssertEqual(quick.externalId, "amex:v1:REF1")
+        XCTAssertEqual(quick.bookedAt, tap)
+        XCTAssertNil(quick.valueAt)
+        XCTAssertEqual(quick.transactionDescription, "Grocer")
+        let refund = try XCTUnwrap(try ctx.fetch(FetchDescriptor<Transaction>()).first { $0.externalId == "amex:v1:REF3" })
+        XCTAssertEqual(refund.direction, .credit)
+        XCTAssertEqual(refund.amountEur, 10)
+        // The payment counts once, through the mirror.
+        XCTAssertEqual(CoreLogic.Accounts.computeNativeBalances([card], in: ctx)[card.id], Decimal(string: "257.50"))
+
+        let again = try CoreLogic.StatementImport.importCSV(csv, into: card, in: ctx)
+        XCTAssertEqual(again.skippedDuplicate, 3)
+        XCTAssertEqual(again.skippedTransfers, 1)
+        XCTAssertEqual(again.inserted, 0)
+        XCTAssertEqual(again.matchedManual, 0)
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<Transaction>()), 4)
     }
 }

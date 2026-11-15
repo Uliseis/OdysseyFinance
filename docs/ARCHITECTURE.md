@@ -65,6 +65,8 @@ A move between two of your own accounts must not count as spending or income. Th
 - **Transfer routes** handle a bank line like *"To Savings"* whose other side has no bank feed. The route matches it by pattern and books a *mirror* leg (`mirror:<source id>`) on a manual account.
 - **Manual pairing and internal moves** cover everything else, such as splitting a broker deposit between a fund account and a pension wrapper.
 
+A card statement import (Revolut or Amex CSV, on a manual account) never re-adds a transfer leg. Revolut top-ups are dropped by row type. Amex rows carry no type, so a card payment is dropped when it matches a route mirror already on the card (same amount, within 7 days). Create the paying bank's route before importing the first statement that contains a payment.
+
 `TransferInvariants` checks that every group balances and stays consistent across archive, exclude and space changes.
 
 ## Investments

@@ -192,9 +192,11 @@ struct AccountDetailView: View {
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
-            importSummary = try CoreLogic.StatementImport.importRevolutCSV(text, into: account, in: ctx)
-        } catch CoreLogic.RevolutCSV.ParseError.missingColumns(let columns) {
-            saveError = "That doesn’t look like a Revolut statement (missing \(columns.joined(separator: ", ")))."
+            importSummary = try CoreLogic.StatementImport.importCSV(text, into: account, in: ctx)
+        } catch CoreLogic.StatementCSV.ParseError.missingColumns(let columns) {
+            saveError = columns == ["Referencia"]
+                ? "Export the Amex CSV with “Incluir todos los detalles de la operación” ticked."
+                : "That doesn’t look like a Revolut or Amex statement (missing \(columns.joined(separator: ", ")))."
         } catch {
             saveError = "The statement wasn’t imported."
         }
@@ -206,7 +208,7 @@ struct AccountDetailView: View {
             "\(s.matchedManual) already logged by hand, now linked to the statement.",
         ]
         if s.skippedDuplicate > 0 { lines.append("\(s.skippedDuplicate) already imported.") }
-        if s.skippedTransfers > 0 { lines.append("\(s.skippedTransfers) top-ups skipped (they come in as transfers).") }
+        if s.skippedTransfers > 0 { lines.append("\(s.skippedTransfers) top-ups or card payments skipped (they come in as transfers).") }
         if s.skippedNotCompleted > 0 { lines.append("\(s.skippedNotCompleted) pending/reverted rows ignored.") }
         if !s.errors.isEmpty { lines.append("\(s.errors.count) rows couldn’t be read.") }
         if !s.unmatched.isEmpty {

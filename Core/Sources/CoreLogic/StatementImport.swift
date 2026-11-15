@@ -3,7 +3,7 @@ import SwiftData
 import CoreModel
 
 extension CoreLogic {
-    // Monthly statement import for a manual account (the Revolut credit card). Rows the user
+    // Monthly statement import for a manual card account (Revolut or Amex CSV). Rows the user
     // already quick-added during the month are matched by content — same amount, within
     // matchWindow — and upgraded to the statement's externalId, so the next import is a plain
     // id dedupe and the user's merchant naming and category survive. Only genuinely new
@@ -39,16 +39,18 @@ extension CoreLogic {
         public static let matchWindow: TimeInterval = 3 * 86_400
         // Auto-recurring rows are booked on the expected day; the real charge wanders ~5 days.
         public static let recurringMatchWindow: TimeInterval = 7 * 86_400
+        // A card payment books at the paying bank and at the issuer a few business days apart.
+        public static let paymentMatchWindow: TimeInterval = 7 * 86_400
         // Quick-add rows and screenshot-sourced rows are the only ones a statement can supersede.
         static let matchablePrefixes = ["manual-tx:", "revolutshot:", Automations.recurringPrefix]
 
         @MainActor @discardableResult
-        public static func importRevolutCSV(
+        public static func importCSV(
             _ text: String, into account: Account, in ctx: ModelContext, now: Date = .now
         ) throws -> Summary {
             guard CoreLogic.Accounts.isManual(account) else { throw ImportError.notManualAccount }
             guard !account.archived else { throw ImportError.archived }
-            let parsed = try RevolutCSV.parse(text)
+            let parsed = try StatementCSV.parse(text)
 
             var summary = Summary()
             summary.parsed = parsed.rows.count + parsed.skippedTransfers + parsed.skippedNotCompleted
@@ -60,9 +62,22 @@ extension CoreLogic {
             let existing = try ctx.fetch(FetchDescriptor<Transaction>(
                 predicate: #Predicate { $0.account?.id == accountId }))
             let known = Set(existing.map(\.externalId))
-            var fresh: [RevolutCSV.Row] = []
+            var fresh: [StatementCSV.Row] = []
             for row in parsed.rows {
                 if known.contains(row.externalId) { summary.skippedDuplicate += 1 } else { fresh.append(row) }
+            }
+            // Revolut flags its top-ups by type. Amex rows have no type, so a card payment is
+            // recognised by the mirror leg the paying bank's transfer route already booked here.
+            if parsed.format == .amex {
+                var mirrors = existing.filter { $0.amount > 0 && $0.externalId.hasPrefix(TransferRoutes.mirrorPrefix) }
+                fresh.removeAll { row in
+                    guard row.amount > 0, let m = mirrors.firstIndex(where: {
+                        $0.amount == row.amount && abs($0.bookedAt.timeIntervalSince(row.startedAt)) <= paymentMatchWindow
+                    }) else { return false }
+                    mirrors.remove(at: m)
+                    summary.skippedTransfers += 1
+                    return true
+                }
             }
 
             // Nearest-in-time pairs first, globally, so a charge two days off can't steal the
@@ -87,9 +102,10 @@ extension CoreLogic {
                 let tx = candidates[pair.candidate]
                 let row = fresh[pair.row]
                 tx.externalId = row.externalId
-                // The statement date decides which side of the balance anchor the charge falls.
-                tx.bookedAt = row.startedAt
-                tx.valueAt = row.completedAt
+                // The statement date decides which side of the balance anchor the charge falls,
+                // unless it is only a day: then the quick-add's tap time is the better clock.
+                if !row.dateOnly { tx.bookedAt = row.startedAt }
+                if let completed = row.completedAt { tx.valueAt = completed }
                 tx.updatedAt = now
                 summary.matchedManual += 1
             }

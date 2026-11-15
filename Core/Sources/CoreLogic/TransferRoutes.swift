@@ -4,8 +4,10 @@ import CoreModel
 
 extension CoreLogic {
     public enum TransferRoutes {
+        public static let mirrorPrefix = "mirror:"
+
         public static func mirrorExternalId(_ sourceTxId: UUID) -> String {
-            "mirror:\(sourceTxId.uuidString)"
+            mirrorPrefix + sourceTxId.uuidString
         }
 
         public static func routeMatches(route: TransferRoute, tx: Transaction) -> Bool {

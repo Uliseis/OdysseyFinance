@@ -5,40 +5,25 @@ extension CoreLogic {
     // byte-for-byte or every historical row re-imports as a duplicate:
     //   revolutcsv:v1:{startedUTCDay}:{amountAsWritten}:{slug}:{dupIdx}
     public enum RevolutCSV {
-        public struct Row: Equatable, Sendable {
-            public let externalId: String
-            public let startedAt: Date
-            public let completedAt: Date?
-            public let amount: Decimal
-            public let description: String?
-        }
-
-        public struct Parsed: Equatable, Sendable {
-            public let rows: [Row]
-            public let skippedTransfers: Int
-            public var skippedNotCompleted = 0
-            public let errors: [String]
-        }
-
-        public enum ParseError: Error, Equatable {
-            case missingColumns([String])
-        }
-
         static let requiredColumns = ["Type", "Started Date", "Completed Date", "Description", "Amount"]
 
-        public static func parse(_ text: String) throws -> Parsed {
-            var records = splitRecords(text)
-            guard !records.isEmpty else { throw ParseError.missingColumns(requiredColumns) }
+        public static func parse(_ text: String) throws -> StatementCSV.Parsed {
+            try parse(StatementCSV.records(text))
+        }
+
+        static func parse(_ records: [[String]]) throws -> StatementCSV.Parsed {
+            var records = records
+            guard !records.isEmpty else { throw StatementCSV.ParseError.missingColumns(requiredColumns) }
             let header = records.removeFirst().map { $0.trimmingCharacters(in: .whitespaces) }
             let missing = requiredColumns.filter { !header.contains($0) }
-            guard missing.isEmpty else { throw ParseError.missingColumns(missing) }
+            guard missing.isEmpty else { throw StatementCSV.ParseError.missingColumns(missing) }
             func field(_ record: [String], _ name: String) -> String? {
                 guard let i = header.firstIndex(of: name), i < record.count else { return nil }
                 return record[i]
             }
 
             var dupCounts: [String: Int] = [:]
-            var rows: [Row] = []
+            var rows: [StatementCSV.Row] = []
             var skipped = 0
             var notCompleted = 0
             var errors: [String] = []
@@ -69,14 +54,14 @@ extension CoreLogic {
                 let signature = "\(day)|\(amountText)|\(slugged)"
                 let dupIdx = dupCounts[signature, default: 0]
                 dupCounts[signature] = dupIdx + 1
-                rows.append(Row(
+                rows.append(StatementCSV.Row(
                     externalId: "revolutcsv:v1:\(day):\(amountText):\(slugged):\(dupIdx)",
                     startedAt: started,
                     completedAt: completed,
                     amount: amount,
                     description: description.isEmpty ? nil : description))
             }
-            return Parsed(rows: rows, skippedTransfers: skipped, skippedNotCompleted: notCompleted, errors: errors)
+            return StatementCSV.Parsed(rows: rows, skippedTransfers: skipped, skippedNotCompleted: notCompleted, errors: errors)
         }
 
         // lower → NFKD → [^a-z0-9]+ → "-" → trim → first 40. Combining marks are separators,
@@ -131,52 +116,8 @@ extension CoreLogic {
             return s
         }
 
-        // Minimal RFC 4180: quoted fields, doubled quotes, CRLF or LF. Enough for Revolut.
-        static func splitRecords(_ text: String) -> [[String]] {
-            var records: [[String]] = []
-            var fields: [String] = []
-            var current = ""
-            var inQuotes = false
-            let chars = Array(text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text)
-            var i = 0
-            while i < chars.count {
-                let c = chars[i]
-                if inQuotes {
-                    if c == "\"" {
-                        if i + 1 < chars.count, chars[i + 1] == "\"" { current.append("\""); i += 1 }
-                        else { inQuotes = false }
-                    } else {
-                        current.append(c)
-                    }
-                } else if c == "\"" {
-                    inQuotes = true
-                } else if c == "," {
-                    fields.append(current); current = ""
-                } else if c == "\n" || c == "\r" || c == "\r\n" {
-                    fields.append(current); current = ""
-                    records.append(fields); fields = []
-                } else {
-                    current.append(c)
-                }
-                i += 1
-            }
-            if !current.isEmpty || !fields.isEmpty {
-                fields.append(current)
-                records.append(fields)
-            }
-            return records
-        }
-
-        private static let madridWithSeconds = makeFormatter("yyyy-MM-dd HH:mm:ss", tz: "Europe/Madrid")
-        private static let madridNoSeconds = makeFormatter("yyyy-MM-dd HH:mm", tz: "Europe/Madrid")
-        private static let utcDay = makeFormatter("yyyy-MM-dd", tz: "UTC")
-
-        private static func makeFormatter(_ format: String, tz: String) -> DateFormatter {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = TimeZone(identifier: tz)
-            f.dateFormat = format
-            return f
-        }
+        private static let madridWithSeconds = StatementCSV.formatter("yyyy-MM-dd HH:mm:ss", tz: "Europe/Madrid")
+        private static let madridNoSeconds = StatementCSV.formatter("yyyy-MM-dd HH:mm", tz: "Europe/Madrid")
+        private static let utcDay = StatementCSV.formatter("yyyy-MM-dd", tz: "UTC")
     }
 }
