@@ -39,6 +39,17 @@ struct ClaudeReviewView: View {
                     LabeledContent("Uncategorized",
                                    value: "\(item.preview.before.uncategorized) → \(item.preview.after.uncategorized)")
                 }
+                if !item.preview.months.isEmpty {
+                    Section {
+                        ForEach(item.preview.months, id: \.start) { month in
+                            ClaudeMonthRow(month: month)
+                        }
+                    } header: {
+                        Text("Months Affected")
+                    } footer: {
+                        Text("Every pay cycle whose income or spending this batch changes.")
+                    }
+                }
                 ForEach(outcome.ops, id: \.index) { op in
                     ClaudeOpSection(op: op, tense: .preview,
                                     permanent: item.batch.ops.indices.contains(op.index) && !item.batch.ops[op.index].isUndoable)
@@ -80,6 +91,26 @@ struct ClaudeSenderLabel: View {
             Label("Unverified sender", systemImage: "exclamationmark.shield.fill")
                 .foregroundStyle(.orange)
         }
+    }
+}
+
+struct ClaudeMonthRow: View {
+    let month: MonthChange
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Text("\(month.start.formatted(.dateTime.day().month().year())) – \(month.end.addingTimeInterval(-1).formatted(.dateTime.day().month()))")
+                .font(.subheadline.weight(.medium))
+            if month.expenseBefore != month.expenseAfter {
+                Text("Spending \(Money.format(month.expenseBefore, currency: "EUR")) → \(Money.format(month.expenseAfter, currency: "EUR"))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if month.incomeBefore != month.incomeAfter {
+                Text("Income \(Money.format(month.incomeBefore, currency: "EUR")) → \(Money.format(month.incomeAfter, currency: "EUR"))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .monospacedDigit()
     }
 }
 
@@ -193,6 +224,10 @@ struct ClaudeOpSection: View {
         case "deleteRoute": "Delete Transfer Route"
         case "requestBankSync": "Sync Banks"
         case "requestReconnect": "Reconnect Bank"
+        case "createTransaction": "New Row"
+        case "mirrorTransfer": "Mirror Transfer"
+        case "createSharedGroupFromCredit": "Shared Expense From a Payback"
+        case "archiveAccount": "Archive Account"
         case "restoreCategories": "Restore Categories"
         case "deleteCategory": "Remove Category"
         case "deleteValuation": "Remove Valuation"
