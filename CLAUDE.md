@@ -12,6 +12,7 @@ Native iOS personal finance app (SwiftUI, SwiftData, CloudKit) for a single user
 - Core tests: `swift test --package-path Core`
 - One suite: `swift test --package-path Core --filter CoreLogicTests.TransfersTests`
 - Importer tests: `swift test --package-path Tools/ImportFromPostgres`
+- Claude MCP server tests: `swift test --package-path Tools/OdysseyMCP`; build with `swift build -c release --package-path Tools/OdysseyMCP` and register with `claude mcp add odyssey -- "$PWD/Tools/OdysseyMCP/.build/release/OdysseyMCP"`
 - iOS build (`swift test` doesn't compile `App/` or iOS-only `CoreSync` code, so run this too): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyFinance -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO`
 - Device build: same command with `-destination 'generic/platform=iOS' -allowProvisioningUpdates`
 - Repo guards: `scripts/check-repo.sh [base-ref]`
@@ -21,8 +22,8 @@ CI (`.github/workflows/ci.yml`) runs the guards, both test suites and the iOS bu
 
 ## Layout
 - `App/`: the SwiftUI target only. `Features/<Feature>/` views, `Intents/` App Intents, `Support/` theme, gates and runners. Besides `App.swift`, top-level `App/*.swift` files are `#if DEBUG` one-shot tools.
-- `Core/Sources/`: the Swift package (iOS and macOS). `CoreModel` (`@Model` types, no logic) → `CoreIntegrations` (HTTP clients, JWT signing, Keychain) → `CoreLogic` (every business rule) → `CoreSync` (`CKSyncEngine`). Tests in `Core/Tests/<Target>Tests/`.
-- `Tools/`: the finished one-shot Postgres → SwiftData migration.
+- `Core/Sources/`: the Swift package (iOS and macOS). `CoreModel` (`@Model` types, no logic) → `CoreIntegrations` (HTTP clients, JWT signing, Keychain) → `CoreLogic` (every business rule) → `CoreSync` (`CKSyncEngine`) → `CoreBridge` (Claude bridge snapshot, replica and queries). Tests in `Core/Tests/<Target>Tests/`.
+- `Tools/`: the finished one-shot Postgres → SwiftData migration, and `OdysseyMCP`, Claude's MCP server (D13).
 - `Spec/`: frozen copy of the original Next.js app, the porting reference.
 - `Vercel/`: static AASA and config for the bank-redirect host.
 - `design/app-icon/`: icon generator and SVG sources.
@@ -50,7 +51,7 @@ Each rule is yes/no. "Enforced by" says where; `review` means no machine check y
 | 15 | Icon PNGs come from `design/app-icon/make_icon.py`; never edit them by hand | review |
 
 ## Read before changing
-- Sync, bank sync, transfers, investments or automations: `docs/ARCHITECTURE.md`.
+- Sync, bank sync, transfers, investments, automations or the Claude bridge: `docs/ARCHITECTURE.md`.
 - Anything settled in `docs/decisions.md`: reopening one needs a new entry that supersedes it.
 - Porting behaviour from the web app: the matching `Spec/lib/*.ts`.
 

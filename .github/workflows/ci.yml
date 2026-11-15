@@ -19,7 +19,7 @@ jobs:
         run: scripts/check-repo.sh "$BASE"
 
   tests:
-    name: Core + importer tests
+    name: Core + tools tests
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +29,8 @@ jobs:
         run: swift test --package-path Core
       - name: ImportFromPostgres
         run: swift test --package-path Tools/ImportFromPostgres
+      - name: OdysseyMCP
+        run: swift test --package-path Tools/OdysseyMCP
 
   ios-build:
     name: iOS build
