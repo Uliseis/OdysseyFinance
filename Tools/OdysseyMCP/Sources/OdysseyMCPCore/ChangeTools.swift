@@ -73,7 +73,7 @@ extension ToolCatalog {
         Tool(name: "pairing_info", description: """
             This Mac's signing-key fingerprint and whether the phone has paired it, accepts changes and which \
             auto-apply switches are on. Publishes the public key so the phone can pair: the user opens \
-            Settings → Claude → Pair this Mac and checks the fingerprint matches.
+            Settings → Claude → Pair a Mac and checks the fingerprint matches.
             """,
              inputSchema: .object(["type": "object", "properties": .object([:])]),
              annotations: .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false)),
@@ -161,7 +161,7 @@ extension ToolCatalog {
             pairedOnPhone: claude?.trustedKeyIds.contains(keyId) ?? false,
             phoneAcceptsChanges: claude?.acceptsChanges ?? false,
             autoApply: claude?.autoApply ?? [],
-            howToPair: "On the iPhone: Settings → Claude → Pair this Mac. Check the fingerprint shown there matches, then confirm with Face ID.")))
+            howToPair: "On the iPhone: Settings → Claude → Pair a Mac. Check the fingerprint shown there matches, then confirm with Face ID.")))
     }
 
     // MARK: - helpers

@@ -35,6 +35,7 @@ struct SettingsView: View {
                     SettingsLinkRow(title: "Matches", systemImage: "plusminus.circle", destination: .sharedExpenses)
                     SettingsLinkRow(title: "Budgets", systemImage: "chart.pie", destination: .budgets)
                     SettingsLinkRow(title: "Automations", systemImage: "bolt.badge.clock", destination: .automations)
+                    SettingsLinkRow(title: "Claude", systemImage: "sparkles", destination: .claude)
                 }
                 Section {
                     Picker(selection: $cycleStartDay) {
@@ -90,6 +91,7 @@ struct SettingsView: View {
                 case .spaces: ManageSpacesView()
                 case .groups: ManageGroupsView()
                 case .trading212: Trading212SettingsView()
+                case .claude: ClaudeSettingsView()
                 }
             }
             .navigationDestination(for: Connection.self) { ConnectionDetailView(connection: $0) }
@@ -152,6 +154,7 @@ struct SettingsView: View {
         case "transfers": path.append(SettingsDestination.transfers)
         case "trading212": path.append(SettingsDestination.trading212)
         case "automations": path.append(SettingsDestination.automations)
+        case "claude": path.append(SettingsDestination.claude)
         case "spaces", "space-edit": path.append(SettingsDestination.spaces)
         case "groups", "group-edit": path.append(SettingsDestination.groups)
         case "categories", "category-edit": path.append(SettingsDestination.categories)
@@ -169,7 +172,7 @@ struct SettingsView: View {
 }
 
 enum SettingsDestination: Hashable {
-    case connections, transfers, sharedExpenses, budgets, categories, rules, transferRoutes, spaces, groups, trading212, automations
+    case connections, transfers, sharedExpenses, budgets, categories, rules, transferRoutes, spaces, groups, trading212, automations, claude
 }
 
 // A Settings navigation row: teal icon chip + title, pushing a destination.
