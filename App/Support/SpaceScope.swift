@@ -1,5 +1,6 @@
 import Foundation
 import CoreModel
+import CoreLogic
 
 // Ports lib/spaces.ts: the default space catches accounts with no space assignment.
 // Resolved from the persisted `currentSpaceId` (empty/unknown ⇒ default space).
@@ -18,10 +19,7 @@ struct SpaceScope {
 
     // Matches accountInSpaceClause: the default space also includes space-less accounts.
     func includes(_ account: Account?) -> Bool {
-        guard let account, let currentId else { return false }
-        if currentId == defaultId {
-            return account.space == nil || account.space?.id == currentId
-        }
-        return account.space?.id == currentId
+        guard let account, let currentId, let defaultId else { return false }
+        return CoreLogic.Spaces.contains(account, spaceId: currentId, defaultSpaceId: defaultId)
     }
 }
