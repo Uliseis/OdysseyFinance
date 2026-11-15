@@ -69,11 +69,22 @@ struct ConnectionDetailView: View {
                     Text("No accounts").foregroundStyle(.secondary)
                 } else {
                     ForEach(accounts) { account in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(account.displayName).lineLimit(1)
-                            Text([account.type.rawValue.capitalized, account.iban]
-                                .compactMap { $0 }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(account.displayName).lineLimit(1)
+                                Text([account.type.rawValue.capitalized, account.iban,
+                                      account.archived ? "Not synced" : nil]
+                                    .compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            // Accounts the sync discovers are parked archived; this is the
+                            // only place they're listed, so it's where they get approved.
+                            if account.archived {
+                                Spacer()
+                                Button("Approve") { approve(account) }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                            }
                         }
                     }
                 }
@@ -105,6 +116,17 @@ struct ConnectionDetailView: View {
         .alert("Connection", isPresented: $showingResult) {} message: {
             Text(resultMessage)
         }
+    }
+
+    private func approve(_ account: Account) {
+        do {
+            _ = try CoreLogic.Accounts.setArchived(account, false, in: ctx)
+            try ctx.saveTouchingChanges()
+            resultMessage = "\(account.displayName) approved. Its history downloads on the next sync."
+        } catch {
+            resultMessage = "Couldn’t approve the account.\n\n\(error)"
+        }
+        showingResult = true
     }
 
     private func syncNow() {
