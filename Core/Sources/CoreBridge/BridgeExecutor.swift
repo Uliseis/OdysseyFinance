@@ -360,7 +360,7 @@ public enum BridgeExecutor {
 
     // MARK: - lookups
 
-    static func transaction(_ id: UUID, in ctx: ModelContext) throws -> Transaction {
+    public static func transaction(_ id: UUID, in ctx: ModelContext) throws -> Transaction {
         try fetchOne(Transaction.self, id, "transaction", in: ctx)
     }
 

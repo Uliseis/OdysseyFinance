@@ -5,6 +5,7 @@ struct RootTabView: View {
 
     var body: some View {
         let pending = PendingNavigation.shared.transactionId
+        let pendingConnection = PendingNavigation.shared.connectionId
         TabView(selection: $selection) {
             Tab("Dashboard", systemImage: "rectangle.3.group", value: .dashboard) {
                 DashboardView()
@@ -26,6 +27,7 @@ struct RootTabView: View {
         // that launched the app, or one that arrived while locked), and a change-only
         // observer would leave the user on the Dashboard.
         .onChange(of: pending, initial: true) { _, id in if id != nil { selection = .transactions } }
+        .onChange(of: pendingConnection, initial: true) { _, id in if id != nil { selection = .settings } }
     }
 }
 

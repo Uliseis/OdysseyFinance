@@ -4,6 +4,7 @@ import UIKit
 import LocalAuthentication
 import UserNotifications
 import CoreBridge
+import CoreLogic
 
 struct PendingBatch: Identifiable {
     let batch: BridgeBatch
@@ -89,12 +90,45 @@ final class ClaudeInbox {
 
     private func apply(_ batch: BridgeBatch, sender: BridgeSender, decidedBy: BridgeResult.Decider,
                        root: URL, in ctx: ModelContext) async {
+        // The arrival a split came from is only readable before the legs go.
+        var splitArrivals: [Int: String] = [:]
+        for (i, op) in batch.ops.enumerated() {
+            if case .undoPensionSplit(let id) = op, let tx = try? BridgeExecutor.transaction(id, in: ctx),
+               let arrival = try? CoreLogic.Automations.splitSource(of: tx, in: ctx) {
+                splitArrivals[i] = arrival
+            }
+        }
         let outcome = BridgeExecutor.run(batch, in: ctx)
         let result = BridgeResult(batchId: batch.id, summary: batch.summary, status: BridgeResult.status(of: outcome),
                                   decidedAt: .now, decidedBy: decidedBy, verified: sender.isVerified, outcome: outcome)
+        // The outcome first: a requested bank sync can take a while.
         await record(result, root: root)
+        await performRequests(batch, outcome, splitArrivals: splitArrivals, in: ctx)
         if decidedBy == .auto, UIApplication.shared.applicationState != .active { await Self.notify(result) }
         await ClaudeBridge.exportSnapshot(ctx, force: true)
+    }
+
+    // What only the app can do once an op applied: remember a refused split, talk to the
+    // bank, open the reconnect screen.
+    private func performRequests(_ batch: BridgeBatch, _ outcome: BatchOutcome, splitArrivals: [Int: String],
+                                 in ctx: ModelContext) async {
+        var syncAll = false
+        var syncIds: [UUID] = []
+        for (i, op) in batch.ops.enumerated() where outcome.ops[i].status == .applied {
+            switch op {
+            case .undoPensionSplit:
+                if let arrival = splitArrivals[i] { AutomationSettings.declineSplit(arrival) }
+            case .requestBankSync(let ids):
+                if let ids { syncIds += ids } else { syncAll = true }
+            case .requestReconnect(let id):
+                PendingNavigation.shared.connectionId = id
+            default:
+                break
+            }
+        }
+        if syncAll || !syncIds.isEmpty {
+            await ForegroundBankSync.runNow(ctx, connectionIds: syncAll ? nil : syncIds)
+        }
     }
 
     private func record(_ result: BridgeResult, root: URL) async {
