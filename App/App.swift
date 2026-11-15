@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import LocalAuthentication
 import UserNotifications
 import CoreModel
 import CoreLogic
@@ -151,51 +150,57 @@ struct RootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(CloudKitSyncEngine.self) private var syncEngine
     @AppStorage(SecuritySettings.requireUnlockKey) private var requireUnlock = true
-    @State private var unlocked = authGateBypassed || !SecuritySettings.requireUnlock
-    @State private var authError: String?
+    @State private var appLock = AppLock()
+    @State private var returningFromBackground = false
     @State private var bankLinkMessage: String?
 
+    private var lockEnabled: Bool { requireUnlock && !authGateBypassed }
+
     var body: some View {
-        Group {
-            if unlocked {
-                RootTabView()
-                    .task {
-                        await syncEngine.fetchOnLaunch()
-                    }
-            } else {
-                LockScreen(error: authError, onUnlock: authenticate)
+        // Stays mounted while locked, so coming back lands where you left off.
+        RootTabView()
+            .onAppear {
+                guard lockEnabled else { return }
+                appLock.lock()
+                if !authShowLockOnly { appLock.authenticate() }
             }
-        }
-        .task { if !unlocked && !authShowLockOnly { authenticate() } }
-        // Bank redirects that came back through Safari. Handled here rather than in the
-        // Connections views because leaving for the bank app re-locks the app, which tears
-        // those views down.
-        .onOpenURL { url in Task { await completeBankLink(url) } }
-        .alert(
-            "Bank Connection",
-            isPresented: Binding(get: { bankLinkMessage != nil }, set: { if !$0 { bankLinkMessage = nil } })
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(bankLinkMessage ?? "")
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // Materialize charges captured by the App Intent while the app was suspended.
-            // Only once the engine is up, so we don't race start() on cold launch (the
-            // launch-time drain handles that case).
-            if phase == .active, syncEngine.isRunning {
-                QuickAddDrain.run(modelContext, engine: syncEngine)
+            .task(id: appLock.isLocked) {
+                if !appLock.isLocked { await syncEngine.fetchOnLaunch() }
             }
-            // Refresh bank data on every foreground (throttled). The BGProcessingTask alone
-            // left the app showing stale transactions until Connections was tapped by hand.
-            if phase == .active {
-                Task { await ForegroundBankSync.runIfDue(modelContext, engine: syncEngine) }
+            // Bank redirects that came back through Safari. Handled here, at the root, so
+            // the result shows wherever the user is once they unlock.
+            .onOpenURL { url in Task { await completeBankLink(url) } }
+            .alert(
+                "Bank Connection",
+                isPresented: Binding(get: { bankLinkMessage != nil }, set: { if !$0 { bankLinkMessage = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(bankLinkMessage ?? "")
             }
-            if phase == .background, requireUnlock, !authGateBypassed {
-                unlocked = false
-                authError = nil
+            .onChange(of: scenePhase) { _, phase in
+                // Materialize charges captured by the App Intent while the app was suspended.
+                // Only once the engine is up, so we don't race start() on cold launch (the
+                // launch-time drain handles that case).
+                if phase == .active, syncEngine.isRunning {
+                    QuickAddDrain.run(modelContext, engine: syncEngine)
+                }
+                // Refresh bank data on every foreground (throttled). The BGProcessingTask alone
+                // left the app showing stale transactions until Connections was tapped by hand.
+                if phase == .active {
+                    Task { await ForegroundBankSync.runIfDue(modelContext, engine: syncEngine) }
+                }
+                // Face ID's own prompt also takes the scene inactive and back; only a return
+                // from the background asks again, so a cancelled prompt doesn't loop.
+                if phase == .active, returningFromBackground {
+                    returningFromBackground = false
+                    if !authShowLockOnly { appLock.authenticate() }
+                }
+                if phase == .background {
+                    returningFromBackground = true
+                    if lockEnabled { appLock.lock() }
+                }
             }
-        }
     }
 
     private func completeBankLink(_ url: URL) async {
@@ -208,29 +213,6 @@ struct RootView: View {
             bankLinkMessage = "The bank declined the connection (\(reason))."
         } catch {
             bankLinkMessage = "Couldn’t finish connecting the bank.\n\n\(error)"
-        }
-    }
-
-    private func authenticate() {
-        let context = LAContext()
-        context.localizedFallbackTitle = "Enter passcode"
-        var error: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            authError = error?.localizedDescription ?? "Biometrics unavailable"
-            return
-        }
-        context.evaluatePolicy(
-            .deviceOwnerAuthentication,
-            localizedReason: "Unlock Odyssey Finance"
-        ) { success, evalError in
-            Task { @MainActor in
-                if success {
-                    unlocked = true
-                    authError = nil
-                } else {
-                    authError = evalError?.localizedDescription
-                }
-            }
         }
     }
 }
