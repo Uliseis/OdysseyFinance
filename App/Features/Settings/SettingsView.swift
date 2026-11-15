@@ -95,11 +95,23 @@ struct SettingsView: View {
                 }
             }
             .navigationDestination(for: Connection.self) { ConnectionDetailView(connection: $0) }
+            .task(id: PendingNavigation.shared.connectionId) { openPendingConnection() }
             .navigationDestination(for: SharedExpenseGroup.self) { SharedExpenseGroupDetailView(group: $0) }
             #if DEBUG
             .task { applyHook() }
             #endif
         }
+    }
+
+    @Environment(\.modelContext) private var modelContext
+
+    private func openPendingConnection() {
+        guard let id = PendingNavigation.shared.connectionId else { return }
+        PendingNavigation.shared.connectionId = nil
+        guard let connection = try? modelContext.fetch(FetchDescriptor<Connection>()).first(where: { $0.id == id }) else { return }
+        path = NavigationPath()
+        path.append(SettingsDestination.connections)
+        path.append(connection)
     }
 
     // Disabling the lock is itself a privileged action: without this, anyone holding the

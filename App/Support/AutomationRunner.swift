@@ -78,6 +78,8 @@ enum AutomationNotifications {
 final class PendingNavigation {
     static let shared = PendingNavigation()
     var transactionId: UUID?
+    // A bank Claude asked to reconnect: Settings opens its connection screen.
+    var connectionId: UUID?
 }
 
 final class NotificationResponder: NSObject, UNUserNotificationCenterDelegate {

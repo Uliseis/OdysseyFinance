@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import UIKit
 import CoreLogic
+import CoreModel
 import CoreIntegrations
 import CoreSync
 
@@ -41,6 +42,25 @@ enum ForegroundBankSync {
         guard isDue() else { return }
         lastRun = .now
         await withBackgroundTask("ForegroundBankSync") { await run(ctx, engine: engine) }
+    }
+
+    // Claude asked for it and the user (or an auto-apply switch) agreed: skip the throttle.
+    @MainActor
+    static func runNow(_ ctx: ModelContext, connectionIds: [UUID]?) async {
+        guard let signer = try? EBKeychain().loadSigner() else { return }
+        lastRun = .now
+        let api = EBClient(tokenProvider: signer)
+        await withBackgroundTask("ClaudeBankSync") {
+            if let connectionIds {
+                let wanted = Set(connectionIds)
+                for connection in (try? ctx.fetch(FetchDescriptor<Connection>())) ?? [] where wanted.contains(connection.id) {
+                    _ = try? await CoreLogic.EBSync.sync(connection: connection, api: api, in: ctx)
+                }
+            } else {
+                _ = await CoreLogic.EBSync.syncAll(api: api, in: ctx)
+            }
+            await AutomationRunner.run(ctx)
+        }
     }
 
     @MainActor

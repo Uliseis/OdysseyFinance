@@ -52,6 +52,7 @@ enum ClaudeSettings {
         case .createRule: "Create Rules"
         case .applyRules: "Re-run Rules"
         case .recordValuation: "Record Valuations"
+        case .requestBankSync: "Sync Banks on Request"
         }
     }
 }
