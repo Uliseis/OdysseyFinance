@@ -9,12 +9,14 @@ let package = Package(
         .library(name: "CoreLogic", targets: ["CoreLogic"]),
         .library(name: "CoreIntegrations", targets: ["CoreIntegrations"]),
         .library(name: "CoreSync", targets: ["CoreSync"]),
+        .library(name: "CoreBridge", targets: ["CoreBridge"]),
     ],
     targets: [
         .target(name: "CoreModel"),
         .target(name: "CoreLogic", dependencies: ["CoreModel", "CoreIntegrations"]),
         .target(name: "CoreIntegrations", dependencies: ["CoreModel"]),
         .target(name: "CoreSync", dependencies: ["CoreModel", "CoreLogic", "CoreIntegrations"]),
+        .target(name: "CoreBridge", dependencies: ["CoreModel", "CoreLogic", "CoreIntegrations", "CoreSync"]),
 
         .testTarget(name: "CoreModelTests", dependencies: ["CoreModel"]),
         .testTarget(
@@ -24,5 +26,6 @@ let package = Package(
         ),
         .testTarget(name: "CoreIntegrationsTests", dependencies: ["CoreIntegrations", "CoreModel"]),
         .testTarget(name: "CoreSyncTests", dependencies: ["CoreSync", "CoreModel", "CoreLogic"]),
+        .testTarget(name: "CoreBridgeTests", dependencies: ["CoreBridge", "CoreSync", "CoreModel", "CoreLogic"]),
     ]
 )
