@@ -50,6 +50,9 @@ extension CoreLogic {
             guard source.account?.id != targetAccount.id else { return nil }
             if source.routedFromTx != nil { return nil }
             if targetAccount.archived { return nil }
+            // Once the target has its own bank feed, the feed carries the real leg and
+            // detect pairs it; a mirror would count the transfer twice.
+            if let since = FeedAdoption.feedSince(of: targetAccount), source.bookedAt >= since { return nil }
 
             // TS uses strict equality on spaceId; if both are nil they're equal,
             // so a route between two manual accounts with no space proceeds.

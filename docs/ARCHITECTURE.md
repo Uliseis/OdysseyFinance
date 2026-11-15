@@ -55,6 +55,7 @@ sequenceDiagram
 3. Linking a bank opens the consent flow in `ASWebAuthenticationSession`. The redirect is an `https` URL on the app's associated domain, which the session intercepts and hands back to the app. Bank apps that do SCA themselves (Revolut, ING) open the redirect in Safari instead: it then arrives as a universal link, or the page served at the redirect path (`Vercel/ios-callback.html`) forwards it to the `odysseyfinance://` scheme. `RootView.onOpenURL` closes the stale auth sheet and finishes the pending connection, found by the `state` stored before the browser opened.
 4. Sync fetches balances and transactions per account. A per-connection watermark only advances when every account fetched cleanly. Rows are deduplicated on `(account, externalId)`.
 5. Post-processing runs over the new rows: FX conversion, rule categorisation, transfer-route mirrors and transfer detection.
+6. When a bank later exposes an account the user tracked by hand (a credit card added to the consent), it is discovered as a separate parked account. `FeedAdoption` folds it into the manual account: feed rows re-key their manual twins, replace route mirrors with the real paired leg, or move across, and the manual account takes over the feed's identity. From its `feedSince` date, routes no longer mirror into it.
 
 ## Transfers
 
