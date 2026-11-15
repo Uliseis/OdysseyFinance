@@ -60,6 +60,15 @@ extension CoreLogic {
             return isoDate(max(incremental, maxLookback))
         }
 
+        // Post-processing reaches back as far as the run fetched: after a gap longer than 30
+        // days (an expired consent) the older rows would otherwise never be categorized,
+        // routed or paired.
+        static func postProcessDays(lastSyncAt: Date?, now: Date = .now) -> Int {
+            guard let lastSyncAt else { return txLookbackDays }
+            let gapDays = Int((now.timeIntervalSince(lastSyncAt) / 86_400).rounded(.up))
+            return min(max(30, gapDays + txIncrementalOverlapDays), txLookbackDays)
+        }
+
         nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
 
         // MARK: - stale-run reaper
@@ -96,17 +105,25 @@ extension CoreLogic {
                 throw SyncError.noSession
             }
 
+            let postDays = postProcessDays(lastSyncAt: connection.lastSyncAt, now: now)
             let run = SyncRun(connector: .enablebanking, connection: connection, startedAt: now)
             ctx.insert(run)
             try ctx.saveTouchingChanges()
 
+            // A reconnect can land while this run awaits the bank (the foreground sync starts
+            // as the bank's redirect opens the app). Its fresh session must not inherit the
+            // verdict on the one this run started with.
+            func stillCurrent() -> Bool { connection.sessionId == sessionId }
+
             do {
                 let session = try await api.getSession(sessionId)
                 guard session.status == "AUTHORIZED" else {
-                    let expired = ["REVOKED", "INVALID", "CLOSED"].contains(session.status)
-                    connection.status = expired ? .expired : .error
-                    connection.lastError = "Session status: \(session.status)"
-                    connection.updatedAt = now
+                    if stillCurrent() {
+                        let expired = ["REVOKED", "INVALID", "CLOSED"].contains(session.status)
+                        connection.status = expired ? .expired : .error
+                        connection.lastError = "Session status: \(session.status)"
+                        connection.updatedAt = now
+                    }
                     finish(run, status: .error, error: "session \(session.status)")
                     try ctx.saveTouchingChanges()
                     result.errors.append("session \(session.status)")
@@ -142,7 +159,7 @@ extension CoreLogic {
                     post.fxSkipped = fx.skipped
                 } catch { result.errors.append("fx: \(describe(error))") }
                 do {
-                    let cutoff = now.addingTimeInterval(-30 * 86_400)
+                    let cutoff = now.addingTimeInterval(-Double(postDays) * 86_400)
                     let uncategorized = try ctx.fetch(FetchDescriptor<Transaction>(
                         predicate: #Predicate { $0.category == nil && $0.bookedAt >= cutoff }
                     )).filter { $0.categorySource == .bank }.map(\.id)
@@ -153,11 +170,11 @@ extension CoreLogic {
                 } catch { result.errors.append("categorize: \(describe(error))") }
                 do {
                     post.routedMirrors = try TransferRoutes
-                        .apply(in: ctx, sinceDays: 30).mirroredCreated
+                        .apply(in: ctx, sinceDays: postDays).mirroredCreated
                 } catch { result.errors.append("routes: \(describe(error))") }
                 do {
                     post.transfersMatched = try Transfers
-                        .detect(in: ctx, sinceDays: 30).matched
+                        .detect(in: ctx, sinceDays: postDays).matched
                 } catch { result.errors.append("transfers: \(describe(error))") }
                 do {
                     _ = try Transfers.repairGroups(in: ctx)
@@ -191,11 +208,13 @@ extension CoreLogic {
                 try ctx.saveTouchingChanges()
                 return result
             } catch {
-                let expired = (error as? EnableBankingError)
-                    .map { $0.status == 401 || $0.status == 403 } ?? false
-                connection.status = expired ? .expired : .error
-                connection.lastError = describe(error)
-                connection.updatedAt = now
+                if stillCurrent() {
+                    let expired = (error as? EnableBankingError)
+                        .map { $0.status == 401 || $0.status == 403 } ?? false
+                    connection.status = expired ? .expired : .error
+                    connection.lastError = describe(error)
+                    connection.updatedAt = now
+                }
                 finish(run, status: .error, error: describe(error))
                 try? ctx.saveTouchingChanges()
                 throw error

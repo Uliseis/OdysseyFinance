@@ -20,10 +20,12 @@ final class EBSyncTests: XCTestCase {
         var sessionError: Error?
         var txError: Error?
         var lastTxQuery: EBTransactionQuery?
+        var whileSessionInFlight: (@MainActor () -> Void)?
 
         init(session: SessionResponse) { self.session = session }
 
         func getSession(_ sessionId: String) async throws -> SessionResponse {
+            if let whileSessionInFlight { await whileSessionInFlight() }
             if let sessionError { throw sessionError }
             return session
         }
@@ -233,6 +235,30 @@ final class EBSyncTests: XCTestCase {
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<SyncRun>()).first?.status, .error)
     }
 
+    // A reconnect that lands while the sync is still checking the old session must survive it.
+    func testReauthDuringSessionCheckIsNotMarkedExpired() async throws {
+        let ctx = try S.makeContext()
+        let conn = makeConnection(ctx, sessionId: "old-sess")
+        let api = StubAPI(session: makeSession(status: "CLOSED"))
+        api.whileSessionInFlight = { conn.sessionId = "new-sess" }
+        let result = try await Sync.sync(connection: conn, api: api, in: ctx)
+        XCTAssertEqual(conn.status, .active)
+        XCTAssertNil(conn.lastError)
+        XCTAssertEqual(result.errors, ["session CLOSED"])
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<SyncRun>()).first?.status, .error)
+    }
+
+    func testReauthDuringFailedSessionCheckIsNotMarkedExpired() async throws {
+        let ctx = try S.makeContext()
+        let conn = makeConnection(ctx, sessionId: "old-sess")
+        let api = StubAPI(session: makeSession())
+        api.whileSessionInFlight = { conn.sessionId = "new-sess" }
+        api.sessionError = EnableBankingError(status: 401, body: "")
+        _ = try? await Sync.sync(connection: conn, api: api, in: ctx)
+        XCTAssertEqual(conn.status, .active)
+        XCTAssertNil(conn.lastError)
+    }
+
     func testBadUidRecordsErrorAndMetadata() async throws {
         let ctx = try S.makeContext()
         let conn = makeConnection(ctx)
@@ -389,5 +415,38 @@ final class EBSyncTests: XCTestCase {
         let orphanId = orphan.id
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<Transaction>(
             predicate: #Predicate { $0.routedFromTx?.id == orphanId })), 1)
+    }
+
+    func testPostProcessDaysCoversTheFetchedWindow() {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        func days(_ d: Double?) -> Int {
+            Sync.postProcessDays(lastSyncAt: d.map { now.addingTimeInterval(-$0 * 86_400) }, now: now)
+        }
+        XCTAssertEqual(days(1), 30)
+        XCTAssertEqual(days(46), 53)
+        XCTAssertEqual(days(nil), 730)
+        XCTAssertEqual(days(1_000), 730)
+    }
+
+    // An expired consent leaves a gap longer than 30 days; the rows fetched on reconnect
+    // must still be routed.
+    func testPostProcessReachesBackAcrossALongSyncGap() async throws {
+        let ctx = try S.makeContext()
+        let conn = makeConnection(ctx)
+        conn.lastSyncAt = .now.addingTimeInterval(-46 * 86_400)
+        let account = makeLinkedAccount(ctx, connection: conn)
+        let card = S.makeAccount(ctx, name: "Card")
+        try CoreLogic.TransferRoutes.createRoute(pattern: "CARD PAYOFF", target: card, in: ctx)
+        let old = S.makeTx(ctx, account: account, amount: -50, direction: .debit,
+                           bookedAt: .now.addingTimeInterval(-40 * 86_400),
+                           description: "CARD PAYOFF")
+        try ctx.save()
+
+        let api = StubAPI(session: makeSession())
+        api.details[Self.uid] = details()
+        let result = try await Sync.sync(connection: conn, api: api, in: ctx)
+
+        XCTAssertEqual(result.postProcess?.routedMirrors, 1)
+        XCTAssertTrue(old.isTransfer)
     }
 }
