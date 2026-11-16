@@ -30,6 +30,16 @@ struct BridgeFixture {
 
     static func day(_ offset: Int) -> Date { now.addingTimeInterval(Double(offset) * 86_400) }
 
+    // Synthetic ISINs with valid check digits, as in the fund-trade tests.
+    static let fundA = "ZZ0000000A00"
+    static let fundB = "ZZ0000000B09"
+
+    static func utcDay(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
     init() throws {
         ctx = try Self.makeContext()
         try build()
@@ -122,6 +132,19 @@ struct BridgeFixture {
                       raw: try JSONEncoder().encode([CoreLogic.Automations.splitMarkerKey: "arrival-1"]))
 
         ctx.insert(PortfolioValuation(account: broker, asOf: Self.day(-1), marketValueEur: 1100, cashValueEur: 50, notes: "statement"))
+        // A buy, then a switch out of it into another fund. Nothing else here reads fund trades
+        // or the broker's cash, so they sit apart in 2030.
+        broker.brokerCashAnchorEur = 250
+        broker.brokerCashAnchorAt = Self.utcDay(2030, 1, 1)
+        let switchGroup = UUID()
+        for (isin, day, side, units, amount, group) in [
+            (Self.fundA, Self.utcDay(2030, 1, 20), FundTradeSide.buy, Decimal(10), Decimal(100), UUID?.none),
+            (Self.fundA, Self.utcDay(2030, 3, 10), .sell, 10, 120, switchGroup),
+            (Self.fundB, Self.utcDay(2030, 3, 12), .buy, Decimal(string: "6.125")!, 120, switchGroup),
+        ] {
+            ctx.insert(FundTrade(account: broker, isin: isin, tradeDate: day, side: side, units: units, amountEur: amount,
+                                 switchGroupId: group, importKey: "fixture:\(isin):\(side.rawValue)"))
+        }
         ctx.insert(SyncRun(connector: .enablebanking, connection: connection, startedAt: Self.day(0),
                            finishedAt: Self.day(0), status: .ok, insertedTransactions: 3, error: "partial",
                            rawJSON: Data(#"{"note":"run"}"#.utf8)))

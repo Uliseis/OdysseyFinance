@@ -59,7 +59,8 @@ public final class BridgeReplica {
                 excluded: a.excluded, manualOpeningBalance: a.manualOpeningBalance, balanceAnchor: a.balanceAnchor,
                 balanceAnchorAt: a.balanceAnchorAt, costBasisOpeningEur: a.costBasisOpeningEur,
                 costBasisOpeningAt: a.costBasisOpeningAt, liveValueSource: a.liveValueSource,
-                assetQuantity: a.assetQuantity, createdAt: a.createdAt, updatedAt: a.clock))
+                assetQuantity: a.assetQuantity, brokerCashAnchorEur: a.brokerCashAnchorEur,
+                brokerCashAnchorAt: a.brokerCashAnchorAt, createdAt: a.createdAt, updatedAt: a.clock))
             m.connection = a.connectionId.flatMap { connections[$0] }
             m.group = a.groupId.flatMap { groups[$0] }
             m.space = a.spaceId.flatMap { spaces[$0] }
@@ -96,6 +97,12 @@ public final class BridgeReplica {
                 id: v.id, asOf: v.asOf, marketValueEur: v.marketValueEur, cashValueEur: v.cashValueEur,
                 notes: v.notes, createdAt: v.createdAt, updatedAt: v.updatedAt))
             m.account = v.accountId.flatMap { accounts[$0] }
+        }
+        for t in s.fundTrades ?? [] {
+            let m = inserted(FundTrade(
+                id: t.id, isin: t.isin, tradeDate: t.tradeDate, side: t.side, units: t.units, amountEur: t.amountEur,
+                switchGroupId: t.switchGroupId, importKey: t.importKey, createdAt: t.createdAt, updatedAt: t.updatedAt))
+            m.account = t.accountId.flatMap { accounts[$0] }
         }
         for r in s.syncRuns {
             let m = inserted(SyncRun(

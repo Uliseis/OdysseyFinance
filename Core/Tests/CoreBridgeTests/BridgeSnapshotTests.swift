@@ -14,8 +14,21 @@ final class BridgeSnapshotTests: XCTestCase {
     func test_unredactedExport_rebuildsAnIdenticalStore() throws {
         let f = try BridgeFixture()
         let original = try export(f.ctx, redact: false)
+        XCTAssertEqual(original.fundTrades?.count, 3)
+        XCTAssertEqual(original.fundTrades?.filter { $0.switchGroupId != nil }.count, 2)
+        XCTAssertEqual(original.accounts.first { $0.id == f.broker.id }?.brokerCashAnchorEur, 250)
         let replica = try BridgeReplica(original)
         XCTAssertEqual(try export(replica.context, redact: false).normalized(), original.normalized())
+    }
+
+    func test_snapshotWithoutFundTrades_stillDecodes_andLoadsNone() throws {
+        let f = try BridgeFixture()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: BridgeCoding.encoder().encode(export(f.ctx, redact: true))) as? [String: Any])
+        json["fundTrades"] = nil
+        let old = try BridgeCoding.decoder().decode(BridgeSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(old.fundTrades)
+        XCTAssertEqual(try BridgeReplica(old).context.fetchCount(FetchDescriptor<FundTrade>()), 0)
     }
 
     func test_snapshot_survivesJSON() throws {
