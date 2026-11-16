@@ -208,6 +208,23 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertTrue(outcome.failures[0].contains(b), "B was never looked up, so its ISIN names it")
     }
 
+    func testOverlappingRunsShareOneSetOfRequests() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        source.delay = .milliseconds(20)
+
+        let first = Task { await run(ctx) }
+        let second = Task { await run(ctx) }
+        let outcomes = [await first.value, await second.value]
+
+        XCTAssertEqual(source.lookups, [a, b])
+        XCTAssertEqual(source.latests, [a, b])
+        XCTAssertEqual(cache.cache.requestCount, 4)
+        XCTAssertEqual(outcomes[0], outcomes[1], "the second call gets the first one's outcome")
+        XCTAssertEqual(outcomes[1].updated, [acc.id])
+        XCTAssertEqual(try valuations(acc, ctx).count, 1)
+    }
+
     func testACancelledRunMakesNoRequests() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
@@ -564,11 +581,14 @@ private final class FakeFundSource: FundPriceSource {
     var quotes: [String: FundQuote] = [:]
     var lookupErrors: [String: any Error] = [:]
     var latestErrors: [String: any Error] = [:]
+    // Long enough for a second run to start while a request is out.
+    var delay: Duration = .zero
     private(set) var lookups: [String] = []
     private(set) var latests: [String] = []
 
     func lookup(isin: String) async throws -> FundInfo {
         lookups.append(isin)
+        if delay > .zero { try await Task.sleep(for: delay) }
         if let error = lookupErrors[isin] { throw error }
         guard let info = infos[isin] else { throw FundPriceError.notFound }
         return info
@@ -576,6 +596,7 @@ private final class FakeFundSource: FundPriceSource {
 
     func latest(isin: String, currency: String) async throws -> FundQuote {
         latests.append(isin)
+        if delay > .zero { try await Task.sleep(for: delay) }
         if let error = latestErrors[isin] { throw error }
         guard let quote = quotes[isin] else { throw FundPriceError.notFound }
         return quote
