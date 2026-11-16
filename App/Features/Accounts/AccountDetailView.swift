@@ -24,10 +24,15 @@ struct AccountDetailView: View {
     @State private var saveError: String?
     @State private var pins = AutomationSettings.pins
     @State private var pinning: CoreLogic.Recurring.Item?
+    @State private var funds: FundHoldings?
+    @State private var importingFunds = false
     private static let pageSize = 100
 
     private var accountIsLive: Bool { account.modelContext != nil && !account.isDeleted }
     private var isManual: Bool { accountIsLive && CoreLogic.Accounts.isManual(account) }
+    private var isInvestment: Bool { accountIsLive && account.group?.kind == .investment }
+    // An archived account refuses imports, so it only shows what it already holds.
+    private var showsFunds: Bool { isInvestment && search.isEmpty && (funds != nil || !account.archived) }
 
     private var accountTx: [CoreModel.Transaction] {
         guard accountIsLive else { return [] }
@@ -61,6 +66,9 @@ struct AccountDetailView: View {
                 AccountDetailHeader(account: account, balance: nativeBalance,
                                     currency: balanceCurrency ?? account.currency)
                     .instrumentPanelRow()
+            }
+            if showsFunds {
+                FundsSection(holdings: funds, onImport: account.archived ? nil : { importingFunds = true })
             }
             if !recurring.isEmpty, search.isEmpty {
                 recurringSection
@@ -104,9 +112,10 @@ struct AccountDetailView: View {
                 Button("Edit") { editing = AccountEdit(account) }
             }
         }
-        .task { reloadBalance() }
-        .reloadOnModelChange { reloadBalance() }
+        .task { reloadBalance(); reloadFunds() }
+        .reloadOnModelChange { reloadBalance(); reloadFunds() }
         .sheet(item: $editing, content: AccountFormView.init)
+        .sheet(isPresented: $importingFunds) { FundImportView(account: account) }
         .sheet(item: $adding) { TransactionFormView(edit: $0) }
         .sheet(item: $pinning) { item in
             PinDaySheet(item: item) { day in
@@ -137,7 +146,8 @@ struct AccountDetailView: View {
         }
         .saveErrorAlert($saveError)
         .overlay {
-            if rows.isEmpty {
+            // The Funds section would sit under it.
+            if rows.isEmpty, !showsFunds {
                 ContentUnavailableView(
                     search.isEmpty ? "No Transactions" : "No Matches",
                     systemImage: "list.bullet.rectangle",
@@ -233,6 +243,10 @@ struct AccountDetailView: View {
             nativeBalance = CoreLogic.Accounts.computeNativeBalances([account], in: ctx)[account.id]
             balanceCurrency = nil
         }
+    }
+
+    private func reloadFunds() {
+        funds = isInvestment ? FundHoldings.load(for: account, in: ctx) : nil
     }
 }
 
