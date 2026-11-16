@@ -274,10 +274,10 @@ extension CoreLogic {
             }
             if loaded == nil {
                 // An unreadable cache can't say how many requests today already made: assume all
-                // of them, and replace the file so tomorrow starts clean.
+                // of them. Nothing is sent, so the file isn't written over and keeps its prices and
+                // held jumps for when it can be read again.
                 result.cache.requestDay = today
                 result.cache.requestCount = fundRequestsPerDay
-                save()
             }
             if result.cache.requestDay != today {
                 result.cache.requestDay = today
