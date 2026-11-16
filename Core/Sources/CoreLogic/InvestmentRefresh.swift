@@ -261,8 +261,8 @@ extension CoreLogic {
         }
 
         // A name and currency once per fund, a price at most once per fund per UTC day, and no
-        // request past the daily cap. Saved after every request, so a process killed mid-run
-        // still counts what it sent.
+        // request past the daily cap. Saved with the count before every request, so a process
+        // killed mid-request still counts it, and again after with its answer.
         @MainActor
         private static func refreshPrices(
             _ isins: [String], store: any FundPriceCacheStore, source: any FundPriceSource, today: Date
@@ -311,6 +311,7 @@ extension CoreLogic {
                         continue
                     }
                     result.cache.requestCount += 1
+                    save()
                     defer { save() }
                     do {
                         let info = try await source.lookup(isin: isin)
@@ -332,6 +333,7 @@ extension CoreLogic {
                     continue
                 }
                 result.cache.requestCount += 1
+                save()
                 defer { save() }
                 do {
                     let quote = try await source.latest(isin: isin, currency: entry.currency)

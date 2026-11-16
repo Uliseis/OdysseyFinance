@@ -110,15 +110,28 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(cache.cache.requestCount, 4)
     }
 
-    func testTheCacheIsSavedAfterEveryRequest() async throws {
+    func testTheCacheIsSavedBeforeAndAfterEveryRequest() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
 
         _ = await run(ctx)
 
-        XCTAssertEqual(cache.saves.map(\.requestCount), [1, 2, 3, 4],
-                       "a process killed mid-run still remembers the requests it sent")
-        XCTAssertEqual(cache.saves.dropFirst().first?.funds[a]?.price, d("7.4321"))
+        XCTAssertEqual(cache.saves.map(\.requestCount), [1, 1, 2, 2, 3, 3, 4, 4])
+        XCTAssertEqual(cache.saves[1].funds[a]?.name, "Example Fund A")
+        XCTAssertNil(cache.saves[2].funds[a]?.price)
+        XCTAssertEqual(cache.saves[3].funds[a]?.price, d("7.4321"))
+    }
+
+    func testARequestIsCountedInTheSavedCacheWhileItIsOut() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        let store = cache!
+        var savedCounts: [Int] = []
+        source.onRequest = { savedCounts.append(store.cache.requestCount) }
+
+        _ = await run(ctx)
+
+        XCTAssertEqual(savedCounts, [1, 2, 3, 4], "a process killed mid-request still counts it")
     }
 
     func testACacheThatCantBeSavedIsANoticeOnce() async throws {
