@@ -607,6 +607,11 @@ public enum BridgeExecutor {
 
     private static func fundImportReason(_ error: Error, account: String) -> String {
         func list(_ items: [String]) -> String { items.joined(separator: ", ") }
+        // A wrong file can be one long line; its start is enough to recognise it.
+        func quoted(_ header: [String]) -> String {
+            let line = header.joined(separator: ";")
+            return line.count > 120 ? line.prefix(120) + "…" : line
+        }
         switch error {
         case let e as CoreLogic.FundTrades.ImportError:
             switch e {
@@ -630,12 +635,12 @@ public enum BridgeExecutor {
                     + "or a switch's other leg isn't done yet"
             }
         case CoreLogic.MyInvestorOrdersCSV.ParseError.unknownHeader(let header):
-            return "the orders export's header is \(header.joined(separator: ";")); expected "
+            return "the orders export's header is \(quoted(header)); expected "
                 + CoreLogic.MyInvestorOrdersCSV.columns.joined(separator: ";")
         case let e as CoreLogic.MyInvestorOrdersCSV.ParseError:
             return "orders export: \(e)"
         case CoreLogic.MyInvestorMovementsCSV.ParseError.unknownHeader(let header):
-            return "the cash-movements export's header is \(header.joined(separator: ";")); expected "
+            return "the cash-movements export's header is \(quoted(header)); expected "
                 + CoreLogic.MyInvestorMovementsCSV.columns.joined(separator: ";")
         case let e as CoreLogic.MyInvestorMovementsCSV.ParseError:
             return "cash-movements export: \(e)"
