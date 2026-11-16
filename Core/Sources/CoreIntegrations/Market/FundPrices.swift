@@ -15,6 +15,19 @@ public struct FundQuote: Equatable, Sendable {
     }
 }
 
+// What the price source calls the fund, and the currency its NAV is quoted in.
+public struct FundInfo: Equatable, Sendable {
+    public let isin: String
+    public let name: String
+    public let currency: String
+
+    public init(isin: String, name: String, currency: String) {
+        self.isin = isin
+        self.name = name
+        self.currency = currency
+    }
+}
+
 public enum FundPriceError: Error, Equatable {
     case notFound
     case unauthorized
@@ -28,6 +41,7 @@ public enum FundPriceError: Error, Equatable {
 // Callers inject fakes through this.
 public protocol FundPriceSource: Sendable {
     func latest(isin: String, currency: String) async throws -> FundQuote
+    func lookup(isin: String) async throws -> FundInfo
 }
 
 enum FundDates {
