@@ -14,6 +14,7 @@ struct InvestmentsView: View {
     @State private var valuing: Account?
     @State private var period: CoreLogic.Investments.Period = .all
     @State private var refreshError: String?
+    @State private var refreshNotices: [String] = []
 
     private func reload() {
         let scope = SpaceScope.resolve(rawCurrentId: currentSpaceId, spaces: spaces)
@@ -60,10 +61,17 @@ struct InvestmentsView: View {
                         } header: {
                             Text("Accounts")
                         } footer: {
-                            if let refreshError {
-                                Text(refreshError).foregroundStyle(.orange)
-                            } else {
-                                Text("Tap an account to set what it's worth and what you've paid in. Pull down to refresh live prices.")
+                            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                if let refreshError {
+                                    Text(refreshError).foregroundStyle(.orange)
+                                }
+                                // Nothing was refused, so not in the error colour.
+                                ForEach(refreshNotices, id: \.self) { notice in
+                                    Label(notice, systemImage: "info.circle")
+                                }
+                                if refreshError == nil && refreshNotices.isEmpty {
+                                    Text("Tap an account to set what it's worth and what you've paid in. Pull down to refresh live prices.")
+                                }
                             }
                         }
                     }
@@ -82,6 +90,7 @@ struct InvestmentsView: View {
             .refreshable {
                 let outcome = await CoreLogic.InvestmentRefresh.run(in: ctx)
                 refreshError = outcome.failures.first
+                refreshNotices = outcome.notices
                 reload()
             }
             .navigationTitle("Investments")
