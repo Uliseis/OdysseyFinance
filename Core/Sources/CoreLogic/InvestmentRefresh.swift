@@ -54,6 +54,12 @@ extension CoreLogic {
             ))
         }
 
+        @MainActor private static var running = false
+        @MainActor private static var waiting: [CheckedContinuation<Outcome, Never>] = []
+
+        // A call made while a run is going (the foreground sync and a pull to refresh) gets that
+        // run's outcome: a second run would load the same fund price cache, fetch the same
+        // prices again and lose count of the requests.
         @MainActor
         @discardableResult
         public static func run(
@@ -63,6 +69,24 @@ extension CoreLogic {
             fundPrices: (_ apiKey: String) -> any FundPriceSource = { EODHDClient(apiKey: $0) },
             fundPriceCache: any FundPriceCacheStore = FundPriceCacheFile(),
             now: Date = .now
+        ) async -> Outcome {
+            if running { return await withCheckedContinuation { waiting.append($0) } }
+            running = true
+            let outcome = await refreshAll(
+                in: ctx, keychain: keychain, crypto: crypto, fundPrices: fundPrices,
+                fundPriceCache: fundPriceCache, now: now)
+            running = false
+            let waiters = waiting
+            waiting = []
+            for waiter in waiters { waiter.resume(returning: outcome) }
+            return outcome
+        }
+
+        @MainActor
+        private static func refreshAll(
+            in ctx: ModelContext, keychain: any MarketKeys, crypto: any CryptoPriceSource,
+            fundPrices: (_ apiKey: String) -> any FundPriceSource, fundPriceCache: any FundPriceCacheStore,
+            now: Date
         ) async -> Outcome {
             var outcome = Outcome()
             guard let accounts = try? liveValuedAccounts(in: ctx), !accounts.isEmpty else {
