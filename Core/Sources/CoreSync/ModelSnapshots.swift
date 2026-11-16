@@ -169,6 +169,7 @@ public enum ModelSnapshots {
             costBasisOpeningEur: m.costBasisOpeningEur,
             costBasisOpeningAt: m.costBasisOpeningAt,
             liveValueSource: m.liveValueSource, assetQuantity: m.assetQuantity,
+            brokerCashAnchorEur: m.brokerCashAnchorEur, brokerCashAnchorAt: m.brokerCashAnchorAt,
             createdAt: m.createdAt, clock: m.updatedAt
         )
     }
@@ -197,6 +198,8 @@ public enum ModelSnapshots {
         m.costBasisOpeningAt = s.costBasisOpeningAt
         m.liveValueSource = s.liveValueSource
         m.assetQuantity = s.assetQuantity
+        m.brokerCashAnchorEur = s.brokerCashAnchorEur
+        m.brokerCashAnchorAt = s.brokerCashAnchorAt
         m.createdAt = s.createdAt
         m.updatedAt = s.clock
     }
@@ -651,6 +654,58 @@ public enum ModelSnapshots {
             id: s.id, account: nil, asOf: s.asOf,
             marketValueEur: s.marketValueEur, cashValueEur: s.cashValueEur,
             notes: s.notes,
+            createdAt: s.createdAt, updatedAt: s.updatedAt
+        )
+        ctx.insert(m)
+        apply(s, to: m, in: ctx)
+        return m
+    }
+
+    // MARK: - FundTrade
+
+    @MainActor
+    public static func find(fundTrade id: UUID, in ctx: ModelContext) -> FundTrade? {
+        (try? ctx.fetch(FetchDescriptor<FundTrade>(
+            predicate: #Predicate { $0.id == id }
+        )))?.first
+    }
+
+    @MainActor
+    public static func snapshot(_ m: FundTrade) -> FundTradeSnapshot {
+        FundTradeSnapshot(
+            id: m.id, accountId: m.account?.id,
+            isin: m.isin, tradeDate: m.tradeDate, side: m.side,
+            units: m.units, amountEur: m.amountEur,
+            switchGroupId: m.switchGroupId, importKey: m.importKey,
+            createdAt: m.createdAt, updatedAt: m.updatedAt
+        )
+    }
+
+    @MainActor
+    public static func apply(_ s: FundTradeSnapshot, to m: FundTrade, in ctx: ModelContext) {
+        m.account = s.accountId.flatMap { find(account: $0, in: ctx) }
+        m.isin = s.isin
+        m.tradeDate = s.tradeDate
+        m.side = s.side
+        m.units = s.units
+        m.amountEur = s.amountEur
+        m.switchGroupId = s.switchGroupId
+        m.importKey = s.importKey
+        m.createdAt = s.createdAt
+        m.updatedAt = s.updatedAt
+    }
+
+    @MainActor
+    public static func insertOrUpdate(_ s: FundTradeSnapshot, in ctx: ModelContext) -> FundTrade {
+        if let existing = find(fundTrade: s.id, in: ctx) {
+            apply(s, to: existing, in: ctx)
+            return existing
+        }
+        let m = FundTrade(
+            id: s.id, account: nil,
+            isin: s.isin, tradeDate: s.tradeDate, side: s.side,
+            units: s.units, amountEur: s.amountEur,
+            switchGroupId: s.switchGroupId, importKey: s.importKey,
             createdAt: s.createdAt, updatedAt: s.updatedAt
         )
         ctx.insert(m)

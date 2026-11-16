@@ -102,6 +102,8 @@ public enum PullPipeline {
             applySharedExpenseGroup(record, in: ctx, report: &report)
         case RecordType.portfolioValuation:
             applyPortfolioValuation(record, in: ctx, report: &report)
+        case RecordType.fundTrade:
+            applyFundTrade(record, in: ctx, report: &report)
         case RecordType.syncRun:
             applySyncRun(record, in: ctx, report: &report)
         default:
@@ -172,6 +174,10 @@ public enum PullPipeline {
             }
         case RecordType.portfolioValuation:
             if let m = ModelSnapshots.find(portfolioValuation: uuid, in: ctx) {
+                ctx.delete(m); report.deleted += 1
+            }
+        case RecordType.fundTrade:
+            if let m = ModelSnapshots.find(fundTrade: uuid, in: ctx) {
                 ctx.delete(m); report.deleted += 1
             }
         case RecordType.syncRun:
@@ -438,6 +444,23 @@ public enum PullPipeline {
     }
 
     @MainActor
+    private static func applyFundTrade(_ r: CKRecord, in ctx: ModelContext, report: inout PullReport) {
+        guard let snap = try? RecordCoding.decodeFundTrade(r) else {
+            report.skippedDecodeError += 1; return
+        }
+        if let local = ModelSnapshots.find(fundTrade: snap.id, in: ctx) {
+            let local0 = ModelSnapshots.snapshot(local)
+            switch ConflictResolver.resolve(local: local0, remote: snap) {
+            case .applyRemote: ModelSnapshots.apply(snap, to: local, in: ctx); report.updatedRemote += 1
+            case .keepLocal:   report.keptLocal += 1
+            case .merge(let m): ModelSnapshots.apply(m, to: local, in: ctx); report.merged += 1
+            }
+        } else {
+            _ = ModelSnapshots.insertOrUpdate(snap, in: ctx); report.inserted += 1
+        }
+    }
+
+    @MainActor
     private static func applySyncRun(_ r: CKRecord, in ctx: ModelContext, report: inout PullReport) {
         guard let snap = try? RecordCoding.decodeSyncRun(r) else {
             report.skippedDecodeError += 1; return
@@ -481,7 +504,7 @@ public enum PullPipeline {
         case RecordType.categoryRule, RecordType.transferRoute:
             return 2
         case RecordType.transferGroup, RecordType.budget,
-             RecordType.portfolioValuation, RecordType.syncRun:
+             RecordType.portfolioValuation, RecordType.fundTrade, RecordType.syncRun:
             return 3
         case RecordType.transaction:
             return 4

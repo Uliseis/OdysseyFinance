@@ -223,6 +223,49 @@ final class PushPipelineTests: XCTestCase {
         XCTAssertTrue(deletedNames.contains(tx2.id.uuidString), "cascade child tx2 must be enqueued for deletion")
     }
 
+    func test_pendingChanges_enqueuesCascadeDeletedFundTrades() throws {
+        let ctx = try makeContext()
+        let acc = ModelSnapshots.insertOrUpdate(Build.account(), in: ctx)
+        let trade = ModelSnapshots.insertOrUpdate(Build.fundTrade(accountId: acc.id), in: ctx)
+        try ctx.save()
+
+        let changes = PushPipeline.pendingChanges(inserted: [], updated: [], deleted: [acc])
+        let deletedNames: [String] = changes.compactMap {
+            if case .deleteRecord(let rid) = $0 { return rid.recordName } else { return nil }
+        }
+        XCTAssertTrue(deletedNames.contains(trade.id.uuidString), "cascade child fund trade must be enqueued for deletion")
+    }
+
+    func test_fundTrade_pushThenPull_linksAccountAndDeletes() throws {
+        let ctxA = try makeContext()
+        let ctxB = try makeContext()
+        let accSnap = Build.account()
+        let tradeSnap = Build.fundTrade(accountId: accSnap.id, updatedAt: Build.later)
+        ModelSnapshots.insertOrUpdate(accSnap, in: ctxA)
+        let trade = ModelSnapshots.insertOrUpdate(tradeSnap, in: ctxA)
+        try ctxA.save()
+
+        let saves = PushPipeline.allLocalSaves(in: ctxA)
+        XCTAssertTrue(saves.contains {
+            if case .saveRecord(let id) = $0 { return id.recordName == trade.id.uuidString } else { return false }
+        })
+        let records = try [accSnap.id, trade.id].map {
+            try XCTUnwrap(PushPipeline.buildRecord(for: SyncZone.recordID(for: $0), in: ctxA))
+        }
+        XCTAssertEqual(records.last?.recordType, RecordType.fundTrade)
+
+        // Child first, so the pull's dependency order has to put the account ahead of it.
+        let report = try PullPipeline.apply(modifications: records.reversed(), deletions: [], in: ctxB)
+        XCTAssertEqual(report.inserted, 2)
+        let mirrored = try XCTUnwrap(ModelSnapshots.find(fundTrade: trade.id, in: ctxB))
+        XCTAssertEqual(ModelSnapshots.snapshot(mirrored), tradeSnap)
+        XCTAssertEqual(ModelSnapshots.find(account: accSnap.id, in: ctxB)?.fundTrades.map(\.id), [trade.id])
+
+        let deletion = PullDeletion(recordID: SyncZone.recordID(for: trade.id), recordType: RecordType.fundTrade)
+        XCTAssertEqual(try PullPipeline.apply(modifications: [], deletions: [deletion], in: ctxB).deleted, 1)
+        XCTAssertNil(ModelSnapshots.find(fundTrade: trade.id, in: ctxB))
+    }
+
     // System fields (recordID + zone + change tag) round-trip through SyncRecordStore so
     // buildRecord can reuse the change tag.
     func test_syncRecordStore_roundTripsSystemFields() throws {

@@ -12,5 +12,6 @@ public enum RecordType {
     public static let transaction = "Transaction"
     public static let sharedExpenseGroup = "SharedExpenseGroup"
     public static let portfolioValuation = "PortfolioValuation"
+    public static let fundTrade = "FundTrade"
     public static let syncRun = "SyncRun"
 }

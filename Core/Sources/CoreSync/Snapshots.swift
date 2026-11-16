@@ -112,6 +112,8 @@ public struct AccountSnapshot: SyncSnapshot {
     public let costBasisOpeningAt: Date?
     public let liveValueSource: String?
     public let assetQuantity: Decimal?
+    public let brokerCashAnchorEur: Decimal?
+    public let brokerCashAnchorAt: Date?
     public let createdAt: Date
     public let clock: Date
 
@@ -128,6 +130,7 @@ public struct AccountSnapshot: SyncSnapshot {
         balanceAnchor: Decimal? = nil, balanceAnchorAt: Date? = nil,
         costBasisOpeningEur: Decimal? = nil, costBasisOpeningAt: Date? = nil,
         liveValueSource: String? = nil, assetQuantity: Decimal? = nil,
+        brokerCashAnchorEur: Decimal? = nil, brokerCashAnchorAt: Date? = nil,
         createdAt: Date,
         clock: Date
     ) {
@@ -154,6 +157,8 @@ public struct AccountSnapshot: SyncSnapshot {
         self.costBasisOpeningAt = costBasisOpeningAt
         self.liveValueSource = liveValueSource
         self.assetQuantity = assetQuantity
+        self.brokerCashAnchorEur = brokerCashAnchorEur
+        self.brokerCashAnchorAt = brokerCashAnchorAt
         self.createdAt = createdAt
         self.clock = clock
     }
@@ -403,6 +408,35 @@ public struct PortfolioValuationSnapshot: SyncSnapshot {
         self.id = id; self.accountId = accountId; self.asOf = asOf
         self.marketValueEur = marketValueEur; self.cashValueEur = cashValueEur
         self.notes = notes
+        self.createdAt = createdAt; self.updatedAt = updatedAt
+    }
+}
+
+public struct FundTradeSnapshot: SyncSnapshot {
+    public let id: UUID
+    public let accountId: UUID?
+    public let isin: String
+    public let tradeDate: Date
+    public let side: FundTradeSide
+    public let units: Decimal
+    public let amountEur: Decimal
+    public let switchGroupId: UUID?
+    public let importKey: String?
+    public let createdAt: Date
+    public let updatedAt: Date
+    public var clock: Date { updatedAt }
+
+    public init(
+        id: UUID, accountId: UUID?,
+        isin: String, tradeDate: Date, side: FundTradeSide,
+        units: Decimal, amountEur: Decimal,
+        switchGroupId: UUID? = nil, importKey: String? = nil,
+        createdAt: Date, updatedAt: Date
+    ) {
+        self.id = id; self.accountId = accountId
+        self.isin = isin; self.tradeDate = tradeDate; self.side = side
+        self.units = units; self.amountEur = amountEur
+        self.switchGroupId = switchGroupId; self.importKey = importKey
         self.createdAt = createdAt; self.updatedAt = updatedAt
     }
 }

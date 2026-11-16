@@ -89,6 +89,7 @@ final class ClearedFieldSyncTests: XCTestCase {
         check(Build.transaction(clock: t1), RecordCoding.encode)
         check(Build.sharedExpenseGroup(), RecordCoding.encode)
         check(Build.portfolioValuation(), RecordCoding.encode)
+        check(Build.fundTrade(updatedAt: t1), RecordCoding.encode)
         check(Build.syncRun(startedAt: t1), RecordCoding.encode)
     }
 

@@ -25,7 +25,20 @@ final class SnapshotCodingTests: XCTestCase {
         try roundTrip(Build.transaction())
         try roundTrip(Build.sharedExpenseGroup())
         try roundTrip(Build.portfolioValuation())
+        try roundTrip(Build.fundTrade())
         try roundTrip(Build.syncRun())
+    }
+
+    // A bridge file written before the broker cash anchor existed still decodes.
+    func test_accountJSONWithoutBrokerCashAnchor_decodesAsNil() throws {
+        let snap = Build.account()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snap)) as? [String: Any])
+        json["brokerCashAnchorEur"] = nil
+        json["brokerCashAnchorAt"] = nil
+        let decoded = try JSONDecoder().decode(AccountSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(decoded.brokerCashAnchorEur)
+        XCTAssertNil(decoded.brokerCashAnchorAt)
+        XCTAssertEqual(decoded.id, snap.id)
     }
 
     func test_decimalAmounts_andSubSecondDates_areExact() throws {
