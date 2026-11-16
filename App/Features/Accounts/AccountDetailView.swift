@@ -31,8 +31,13 @@ struct AccountDetailView: View {
     private var accountIsLive: Bool { account.modelContext != nil && !account.isDeleted }
     private var isManual: Bool { accountIsLive && CoreLogic.Accounts.isManual(account) }
     private var isInvestment: Bool { accountIsLive && account.group?.kind == .investment }
-    // An archived account refuses imports, so it only shows what it already holds.
-    private var showsFunds: Bool { isInvestment && search.isEmpty && (funds != nil || !account.archived) }
+    // For an account that holds fund trades, or is valued from fund prices and so starts with an
+    // import. An archived account refuses imports, so it only shows what it already holds.
+    private var showsFunds: Bool {
+        guard isInvestment, search.isEmpty else { return false }
+        return funds != nil
+            || (!account.archived && account.liveValueSource == CoreLogic.InvestmentRefresh.fundsSource)
+    }
 
     private var accountTx: [CoreModel.Transaction] {
         guard accountIsLive else { return [] }

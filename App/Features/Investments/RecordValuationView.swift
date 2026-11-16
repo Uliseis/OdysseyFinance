@@ -240,7 +240,7 @@ struct RecordValuationView: View {
             case .crypto:
                 Text("Value = quantity × today's price, refreshed when you open the app. Use the CoinGecko id, e.g. bitcoin or ethereum. Update the quantity whenever you buy or sell.")
             case .funds:
-                Text("Value = the units held from the imported MyInvestor orders × each fund's latest price, plus the cash at MyInvestor, refreshed when you open the app. Enter the cash once, as MyInvestor shows it at the end of that day; transfers and orders after it are counted for you. Add the EODHD key in Settings → Fund Prices.")
+                Text("Value = the units held from the imported MyInvestor orders × each fund's latest price, plus the cash at MyInvestor, refreshed when you open the app. Enter the cash once, as MyInvestor shows it at the end of that day; transfers and orders after it are counted for you. Import the orders on the account's page under Accounts, and add the EODHD key in Settings → Fund Prices.")
             }
         }
     }
