@@ -39,7 +39,7 @@ Format: **decision**, why, and when it's worth revisiting.
 **Revisit when.** The app is distributed to other people.
 
 ### D8. Spaces, shared expenses and investments
-**Decision.** Any number of spaces, with cross-space transfer invariants. Shared expenses are kept. Investments are tracked per account as valuation snapshots plus a cost-basis anchor, with live values from Trading 212 and CoinGecko. There is no per-instrument holdings model.
+**Decision.** Any number of spaces, with cross-space transfer invariants. Shared expenses are kept. Investments are tracked per account as valuation snapshots plus a cost-basis anchor, with live values from Trading 212 and CoinGecko. ~~There is no per-instrument holdings model.~~ Superseded by D16 for funds imported from a broker's order export.
 **Revisit when.** Per-position reporting (lots, dividends per instrument) is needed.
 
 ### D9. Category source is never null
@@ -69,3 +69,8 @@ Format: **decision**, why, and when it's worth revisiting.
 **Decision.** Extends D13. `Tools/OdysseyBridgeHelper` is a minimal signed Mac app whose entitlements name the app's iCloud container. It stays installed in `~/Applications`, and opening it once registers the container on the Mac. It never touches CloudKit's database, and the MCP server still reads the folder by path.
 **Why.** macOS syncs an app's private iCloud Drive container only while an app that names it is installed on the Mac. Without one, the iCloud daemon marks the container "app not installed", stops syncing it and drops the local copies. The bridge worked at first only because the Mac had created the folder itself. iPhone builds registered on the Mac don't count.
 **Revisit when.** The MCP server ships as an app bundle that can claim the container itself, or a Mac app becomes a CloudKit client (D13).
+
+### D16. Fund positions from imported broker orders (2026-11-16)
+**Decision.** Supersedes D8's "There is no per-instrument holdings model." An investment account can carry fund trades imported from the broker's order export: one buy or sell of a fund, by ISIN, with its units and EUR amount. Units, first-in-first-out cost and realised gains per fund derive from the trades and are never typed. Cash at the broker is an anchor plus transfers since, minus buys, plus sells. Market value comes from fund prices by ISIN; the price source is decided in its own entry. Pension plans and robo portfolios without an export stay typed valuations (D8).
+**Why.** A typed snapshot aged silently and showed a loss for months. Per-fund realised and unrealised results need the buy and sell prices, which only the orders carry.
+**Revisit when.** A broker offers an API for positions, or a second broker's export needs importing.

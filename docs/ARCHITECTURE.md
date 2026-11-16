@@ -16,7 +16,7 @@ Everything under `Core/` builds for iOS and macOS, so the domain is tested on th
 
 ## Data model
 
-Fifteen SwiftData models: `Connection`, `AccountSpace`, `AccountGroup`, `Account`, `Category`, `CategoryRule`, `TransferRoute`, `TransferGroup`, `Budget`, `FxRate`, `Transaction`, `SharedExpenseGroup`, `PortfolioValuation`, `SyncRun` and `SyncRecordMeta`.
+Sixteen SwiftData models: `Connection`, `AccountSpace`, `AccountGroup`, `Account`, `Category`, `CategoryRule`, `TransferRoute`, `TransferGroup`, `Budget`, `FxRate`, `Transaction`, `SharedExpenseGroup`, `PortfolioValuation`, `FundTrade`, `SyncRun` and `SyncRecordMeta`.
 
 - **Money is `Decimal`**, never `Double`, in storage and in every calculation. Charts convert only to plot. Every transaction stores its original amount and currency, its EUR amount and the ECB rate used.
 - **Relationships declare their inverse on one side**, and deletes rely on SwiftData's `.cascade` / `.nullify` rules. `CascadeTests` is the regression guard for that behaviour.
@@ -49,6 +49,7 @@ sequenceDiagram
 - **A push sends every field, cleared ones included.** It builds on the cached system fields, which hold no data keys, so the fields come from the record's `changedKeys`. Encoders assign every key, nil included, so a category removed or a transfer unpaired on the phone reaches CloudKit.
 - **Pull is dependency-ordered**, parents before children. A second pass relinks the transaction ↔ shared-expense cycle.
 - **Background refresh** runs from a `BGProcessingTask`. Bank sync also runs on launch and on foreground, throttled to once every 15 minutes.
+- **New record types and fields reach Production by hand.** The app builds against the Development CloudKit environment, so a new record type or field must be deployed to the Production schema in the CloudKit Console before any Production or TestFlight build.
 
 ## Bank sync (Enable Banking)
 
@@ -77,6 +78,7 @@ An investment account is modelled like a cash account: an **anchor plus everythi
 
 - **Cost basis:** an opening figure and date, plus contributions and minus withdrawals after it. Payouts (income-tagged outflows, e.g. rent from a property) are treated as return, not as capital coming back.
 - **Value:** the latest valuation, either typed in or refreshed live from Trading 212 (account summary) or CoinGecko (quantity × price). Automatic refreshes are refused when a value moves by more than 100× in either direction against the previous reading. That guards against a mistyped quantity.
+- **Fund trades:** an investment account can carry the orders imported from the broker's export, one buy or sell per fund (by ISIN) with units and EUR amount. Units, first-in-first-out cost and realised gains per fund come from them, never typed. Cash at the broker is an anchor plus transfers since, minus buys, plus sells (D16). An import needs the orders export and the cash-movements export: a trade's amount is the cash its order really moved (a sale to cash after the tax withheld on its gain, so its credit can fall short of the estimate by the withholding on its first-in-first-out gain), and an order that moved none is a switch leg whose sale takes the amount the other fund's buy received. An import keys each order by day, fund, units and estimated amount, so a later export adds only what is new and corrects amounts saved earlier. The orders export doesn't say in what order one day's orders ran, so each fund's buys and sells are read from the units held today with only each day's closing units kept from going negative. An import is refused whole when the account is archived, a fund held today has no orders in the export (it is incomplete), a fund's buys and sells don't fit exactly one reading, a reading contradicts a saved trade, the saved and new trades don't add up to the units held (a restated amount would save an order twice), or an order has neither a cash movement nor a switch partner. Orders still in progress are not saved: the broker still counts their cash, and a later export brings them back done. They still hold on to the debit already taken for them, so no done order takes it.
 - **Returns:** lifetime and per period. A period return divides the gain by the value at the period start plus half the contributions made during it (a simple Dietz return).
 
 ## Recurring charges and automations
