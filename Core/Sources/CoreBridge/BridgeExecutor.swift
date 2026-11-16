@@ -392,6 +392,115 @@ public enum BridgeExecutor {
             step.undo = [.archiveAccount(accountId: accountId, archived: !archived)]
             step.message = archived ? "Hidden from lists and totals; its bank no longer syncs it" : "Back in lists and totals"
 
+        case .importFundOrders(let accountId, let ordersCsv, let movementsCsv, let heldUnits):
+            let account = try fetchOne(Account.self, accountId, "account", in: ctx)
+            let before = Dictionary(uniqueKeysWithValues: try fundTrades(of: accountId, in: ctx).map { ($0.id, FundTradeRestore(
+                id: $0.id, amountEur: $0.amountEur, switchGroupId: $0.switchGroupId)) })
+            let positionsBefore = Dictionary(uniqueKeysWithValues: CoreLogic.Funds.positions(
+                try CoreLogic.FundTrades.trades(for: account, in: ctx)).map { ($0.isin, $0) })
+            let summary: CoreLogic.FundTrades.ImportSummary
+            do {
+                summary = try CoreLogic.FundTrades.importOrders(
+                    ordersCSV: ordersCsv, movementsCSV: movementsCsv, heldUnits: heldUnits, into: account, in: ctx, now: now)
+            } catch {
+                throw BridgeExecutorError.invalid("Import refused: " + fundImportReason(error, account: account.displayName))
+            }
+            let after = try fundTrades(of: accountId, in: ctx).sorted {
+                ($0.tradeDate, $0.side.rawValue, $0.isin, $0.units) < ($1.tradeDate, $1.side.rawValue, $1.isin, $1.units)
+            }
+            var tradeChanges: [BridgeChange] = []
+            var insertedIds: [UUID] = []
+            var restores: [FundTradeRestore] = []
+            for t in after {
+                if let old = before[t.id] {
+                    guard old.amountEur != t.amountEur || old.switchGroupId != t.switchGroupId else { continue }
+                    restores.append(old)
+                    tradeChanges.append(change(t, before: tradeText(old.amountEur, old.switchGroupId),
+                                               after: tradeText(t.amountEur, t.switchGroupId)))
+                } else {
+                    insertedIds.append(t.id)
+                    tradeChanges.append(change(t, before: nil, after: "new trade, " + tradeText(t.amountEur, t.switchGroupId)))
+                }
+            }
+            if !tradeChanges.isEmpty {
+                // Every fund's position after the import; the figures before only where they moved.
+                step.changes = tradeChanges + summary.positions.map { p in
+                    let was = positionsBefore[p.isin].map(positionText)
+                    return BridgeChange(id: nil, label: "\(p.isin) position", before: was == positionText(p) ? nil : was,
+                                        after: positionText(p))
+                }
+                step.undo = [.restoreFundTrades(deleteIds: insertedIds, restores: restores)]
+            }
+            let unsaved = summary.skippedInProgress + summary.skippedCancelled + summary.skippedRejected
+            step.message = "\(summary.inserted + summary.alreadyPresent) done orders: \(summary.inserted) new, "
+                + "\(summary.alreadyPresent) already saved; \(summary.matchedToCash) matched to cash movements, "
+                + "\(summary.switchPairs) switches (\(summary.switchPairsAdded) new); "
+                + "\(summary.amountsCorrected) amounts corrected by \(summary.amountsCorrectedEur) EUR"
+                + (unsaved == 0 ? "" : "; not saved: \(summary.skippedInProgress) in progress, "
+                    + "\(summary.skippedCancelled) cancelled, \(summary.skippedRejected) rejected")
+
+        case .setBrokerCashAnchor(let accountId, let amount, let at):
+            let account = try investmentAccount(accountId, in: ctx)
+            let was = (amount: account.brokerCashAnchorEur, at: account.brokerCashAnchorAt)
+            let day = amount == nil ? nil : at.map(utcDay)
+            guard was.amount != amount || was.at != day else {
+                step.message = "Already \(anchorText(amount, day, "at the end of") ?? "without an anchor")"
+                return
+            }
+            try CoreLogic.FundTrades.setBrokerCashAnchor(account, amountEur: amount, at: at, in: ctx)
+            step.changes = [BridgeChange(id: accountId, label: "\(account.displayName) cash at the broker",
+                                         before: anchorText(was.amount, was.at, "at the end of"),
+                                         after: anchorText(amount, day, "at the end of"))]
+            step.undo = [.setBrokerCashAnchor(accountId: accountId, amountEur: was.amount, at: was.at)]
+            if let ledger = try CoreLogic.FundTrades.cashLedger(for: account, in: ctx) {
+                let lowest = ledger.lowest
+                step.message = "Cash at the broker now \(toCents(ledger.currentEur)) EUR, lowest \(toCents(lowest.cashEur)) EUR on "
+                    + lowest.date.formatted(.iso8601.year().month().day())
+                    + (lowest.cashEur < 0 ? ": below zero, a sale or a transfer in is missing" : "")
+            } else {
+                step.message = "No anchor: the cash at the broker isn't tracked"
+            }
+
+        case .setCostBasisOpening(let accountId, let amount, let at):
+            let account = try investmentAccount(accountId, in: ctx)
+            let was = (amount: account.costBasisOpeningEur, at: account.costBasisOpeningAt)
+            let day = amount == nil ? nil : at.map(utcDay)
+            guard was.amount != amount || was.at != day else {
+                step.message = "Already \(anchorText(amount, day, "before") ?? "without an opening")"
+                return
+            }
+            let basisBefore = try CoreLogic.Investments.loadMetrics(for: [account], in: ctx)[accountId]?.costBasisEur
+            try CoreLogic.Investments.setCostBasisOpening(account, amountEur: amount, at: at, in: ctx)
+            let basisAfter = try CoreLogic.Investments.loadMetrics(for: [account], in: ctx)[accountId]?.costBasisEur
+            step.changes = [BridgeChange(id: accountId, label: "\(account.displayName) paid in",
+                                         before: anchorText(was.amount, was.at, "before"), after: anchorText(amount, day, "before"))]
+            step.undo = [.setCostBasisOpening(accountId: accountId, amountEur: was.amount, at: was.at)]
+            step.message = "Cost basis \(basisBefore.map { "\(toCents($0))" } ?? "none") → \(basisAfter.map { "\(toCents($0))" } ?? "none") EUR; "
+                + "transfers in after the opening add to it"
+
+        case .setLiveSource(let accountId, let source):
+            let account = try investmentAccount(accountId, in: ctx)
+            let trimmed = source?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let wanted = (trimmed?.isEmpty ?? true) ? nil : trimmed
+            guard wanted != account.liveValueSource else {
+                step.message = "Already \(wanted ?? "typed valuations")"
+                return
+            }
+            // The op carries no quantity: a crypto source would value nothing, and dropping a
+            // quantity couldn't be undone.
+            guard account.assetQuantity == nil else {
+                throw BridgeExecutorError.invalid("\(account.displayName) tracks a quantity for its live price; change its source on the phone")
+            }
+            if wanted?.hasPrefix(CoreLogic.InvestmentRefresh.cryptoPrefix) == true {
+                throw BridgeExecutorError.invalid("A crypto source needs a quantity; set it on the phone")
+            }
+            let was = account.liveValueSource
+            try CoreLogic.Investments.setLiveSource(account, source: wanted, quantity: nil, in: ctx)
+            step.changes = [BridgeChange(id: accountId, label: "\(account.displayName) value",
+                                         before: was ?? "typed valuations", after: wanted ?? "typed valuations")]
+            step.undo = [.setLiveSource(accountId: accountId, source: was)]
+            step.message = wanted.map { "The phone refreshes its value from \($0)" } ?? "Valued by typed valuations only"
+
         case .restoreCategories(let restores):
             for r in restores {
                 let t = try transaction(r.txId, in: ctx)
@@ -419,6 +528,23 @@ public enum BridgeExecutor {
             step.changes = [BridgeChange(id: id, label: v.account?.displayName ?? "valuation", before: "\(v.marketValueEur)", after: nil)]
             try CoreLogic.Investments.deleteValuation(v, in: ctx)
             step.message = "Valuation removed"
+
+        case .restoreFundTrades(let deleteIds, let restores):
+            for id in deleteIds {
+                let t = try fetchOne(FundTrade.self, id, "fund trade", in: ctx)
+                step.changes.append(change(t, before: tradeText(t.amountEur, t.switchGroupId), after: nil))
+                ctx.delete(t)
+            }
+            for r in restores {
+                let t = try fetchOne(FundTrade.self, r.id, "fund trade", in: ctx)
+                guard t.amountEur != r.amountEur || t.switchGroupId != r.switchGroupId else { continue }
+                step.changes.append(change(t, before: tradeText(t.amountEur, t.switchGroupId),
+                                           after: tradeText(r.amountEur, r.switchGroupId)))
+                t.amountEur = r.amountEur
+                t.switchGroupId = r.switchGroupId
+            }
+            try ctx.saveTouchingChanges()
+            step.message = "\(deleteIds.count) imported trades removed, \(step.changes.count - deleteIds.count) restored"
         }
     }
 
@@ -454,6 +580,64 @@ public enum BridgeExecutor {
         try ctx.fetch(FetchDescriptor<Transaction>(predicate: #Predicate { $0.account?.id == accountId }))
     }
 
+    private static func fundTrades(of accountId: UUID, in ctx: ModelContext) throws -> [FundTrade] {
+        try ctx.fetch(FetchDescriptor<FundTrade>(predicate: #Predicate { $0.account?.id == accountId }))
+    }
+
+    private static func investmentAccount(_ id: UUID, in ctx: ModelContext) throws -> Account {
+        let account = try fetchOne(Account.self, id, "account", in: ctx)
+        guard account.group?.kind == .investment else {
+            throw BridgeExecutorError.invalid("\(account.displayName) isn't an investment account")
+        }
+        return account
+    }
+
+    // CoreLogic pins anchors to the UTC day; comparing the same way tells a replay from a change.
+    private static func utcDay(_ date: Date) -> Date {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal.startOfDay(for: date)
+    }
+
+    private static func fundImportReason(_ error: Error, account: String) -> String {
+        func list(_ items: [String]) -> String { items.joined(separator: ", ") }
+        switch error {
+        case let e as CoreLogic.FundTrades.ImportError:
+            switch e {
+            case .notInvestmentAccount:
+                return "\(account) isn't an investment account"
+            case .archived:
+                return "\(account) is archived"
+            case .heldWithoutOrders(let isins):
+                return "the orders export is incomplete: \(list(isins)) held today with no done order in it"
+            case .unreadableFunds(let noReading, let ambiguous):
+                let why = (noReading.isEmpty ? [] : ["no reading of the orders as buys and sells ends at the units held for \(list(noReading))"])
+                    + (ambiguous.isEmpty ? [] : ["more than one reading fits for \(list(ambiguous))"])
+                return why.joined(separator: "; ") + ". Check heldUnits and that the export reaches back to the first order"
+            case .sideConflicts(let keys):
+                return "orders already saved with the other side: \(list(keys))"
+            case .unitsMismatch(let isins):
+                return "saved and new trades don't add up to the units held for \(list(isins)): check heldUnits, "
+                    + "or an order saved before under a restated amount"
+            case .unmatchedOrders(let keys):
+                return "no cash movement or switch partner for \(list(keys)): the cash-movements export misses them, "
+                    + "or a switch's other leg isn't done yet"
+            }
+        case CoreLogic.MyInvestorOrdersCSV.ParseError.unknownHeader(let header):
+            return "the orders export's header is \(header.joined(separator: ";")); expected "
+                + CoreLogic.MyInvestorOrdersCSV.columns.joined(separator: ";")
+        case let e as CoreLogic.MyInvestorOrdersCSV.ParseError:
+            return "orders export: \(e)"
+        case CoreLogic.MyInvestorMovementsCSV.ParseError.unknownHeader(let header):
+            return "the cash-movements export's header is \(header.joined(separator: ";")); expected "
+                + CoreLogic.MyInvestorMovementsCSV.columns.joined(separator: ";")
+        case let e as CoreLogic.MyInvestorMovementsCSV.ParseError:
+            return "cash-movements export: \(e)"
+        default:
+            return "\(error)"
+        }
+    }
+
     // Mirror rows booked and removed by a route change, labelled before they go.
     private static func mirrorChanges(in ctx: ModelContext, _ body: () throws -> Any) throws -> [BridgeChange] {
         func mirrors() throws -> [UUID: Transaction] {
@@ -477,6 +661,23 @@ public enum BridgeExecutor {
 
     private static func ruleLabel(_ rule: CategoryRule) -> String {
         "\(rule.field.rawValue) \(rule.matchType.rawValue) \"\(rule.pattern)\" → \(label(rule.category))"
+    }
+
+    private static func change(_ t: FundTrade, before: String?, after: String?) -> BridgeChange {
+        let day = t.tradeDate.formatted(.iso8601.year().month().day())
+        return BridgeChange(id: t.id, label: "\(day) · \(t.side.rawValue) \(t.isin) · \(t.units) units", before: before, after: after)
+    }
+
+    private static func tradeText(_ amountEur: Decimal, _ switchGroupId: UUID?) -> String {
+        "\(amountEur) EUR" + (switchGroupId == nil ? "" : ", switch leg")
+    }
+
+    private static func positionText(_ p: CoreLogic.Funds.Position) -> String {
+        (p.units > 0 ? "\(p.units) units · cost \(toCents(p.costEur)) EUR" : "sold") + " · realised \(toCents(p.realisedGainEur)) EUR"
+    }
+
+    private static func anchorText(_ amount: Decimal?, _ day: Date?, _ relation: String) -> String? {
+        amount.map { "\($0) EUR" + (day.map { " \(relation) \($0.formatted(.iso8601.year().month().day()))" } ?? "") }
     }
 
     private static func change(_ t: Transaction, before: String?, after: String?) -> BridgeChange {
