@@ -64,7 +64,7 @@ struct FundsSection: View {
                 }
             }
             if let onImport {
-                Button("Import MyInvestor Exports", systemImage: "square.and.arrow.down", action: onImport)
+                Button("Import MyInvestor Exports", systemImage: "tray.and.arrow.down", action: onImport)
             }
         } header: {
             Text("Funds")

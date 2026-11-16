@@ -52,14 +52,15 @@ struct FundImportView: View {
                         Text("Each fund's units and gains are on the account's page.")
                     }
                 } else {
-                    exportsSection
-                    if orders != nil { unitsSection }
+                    // First, so a refusal is seen without scrolling past the funds.
                     if let problem {
                         Section {
                             Label(problem, systemImage: "exclamationmark.triangle")
                                 .foregroundStyle(.orange)
                         }
                     }
+                    exportsSection
+                    if orders != nil { unitsSection }
                 }
             }
             .navigationTitle("MyInvestor Exports")
@@ -110,19 +111,22 @@ struct FundImportView: View {
                 Text("This export has no fund orders.").foregroundStyle(.secondary)
             }
             ForEach($units) { $field in
-                LabeledContent {
+                // Not LabeledContent: its field takes the row and cuts a long fund name to one line.
+                HStack(spacing: Theme.Space.s) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(names[field.isin] ?? field.isin).axLineLimit(3)
+                        if names[field.isin] != nil {
+                            Text(field.isin).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer(minLength: 0)
                     TextField("0", text: $field.text)
                         .multilineTextAlignment(.trailing)
                         .font(.readout(.body, weight: .regular))
                         .keyboardType(.decimalPad)
                         .foregroundStyle(field.isInvalid ? Color.negativeAmount : Color.primary)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(names[field.isin] ?? field.isin).lineLimit(2)
-                        if names[field.isin] != nil {
-                            Text(field.isin).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+                        .frame(maxWidth: 120)
+                        .accessibilityLabel("Units of \(names[field.isin] ?? field.isin)")
                 }
             }
         } header: {
