@@ -33,9 +33,14 @@ struct FundImportView: View {
         // Why a fund imported before starts empty.
         let hint: String?
         var id: String { isin }
-        // Empty means sold. Not a locale-bound number field: under es-ES "12.345" would read as 12345.
+        // Empty or zero means sold. Not a locale-bound number field: under es-ES "12.345" would read as 12345.
         var units: Decimal? { CoreLogic.Transactions.parseQuantity(text) }
-        var isInvalid: Bool { !text.trimmingCharacters(in: .whitespaces).isEmpty && units == nil }
+        // parseQuantity takes only positive units, so a zero ("0", "0,000") is let through here.
+        var isInvalid: Bool {
+            let typed = text.trimmingCharacters(in: .whitespaces)
+            let isZero = typed.contains("0") && typed.allSatisfy { "0,.".contains($0) }
+            return !typed.isEmpty && !isZero && units == nil
+        }
     }
 
     private var canImport: Bool {
@@ -139,7 +144,7 @@ struct FundImportView: View {
         } header: {
             Text("Units held today")
         } footer: {
-            Text("Units held today, as MyInvestor shows them; leave empty if sold. A fund imported before starts from its saved units when this export has no new orders for it.")
+            Text("Units held today, as MyInvestor shows them; leave empty or 0 if sold. A fund imported before starts from its saved units when this export has no new orders for it.")
         }
     }
 
