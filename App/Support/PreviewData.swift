@@ -1,6 +1,7 @@
 #if DEBUG
 import SwiftData
 import CoreModel
+import CoreLogic
 import Foundation
 
 @MainActor
@@ -48,6 +49,28 @@ enum PreviewData {
             account: broker, asOf: Date(timeIntervalSinceNow: -2 * 86_400),
             marketValueEur: 9450, cashValueEur: 300
         ))
+
+        // Saved as an import saves them: UTC days, made-up ISINs.
+        func utcDay(_ daysAgo: Int) -> Date {
+            FX.startOfUTCDay(Date(timeIntervalSinceNow: -Double(daysAgo) * 86_400))
+        }
+        let funds = Account(
+            group: invGroup, space: individual, externalId: UUID().uuidString,
+            type: .broker, institution: "MyInvestor", name: "Index Funds", currency: "EUR",
+            excluded: true, liveValueSource: CoreLogic.InvestmentRefresh.fundsSource,
+            brokerCashAnchorEur: 120, brokerCashAnchorAt: utcDay(10)
+        )
+        ctx.insert(funds)
+        for (isin, daysAgo, side, units, amount) in [
+            ("ZZ0000000A00", 180, FundTradeSide.buy, Decimal(40), Decimal(400)),
+            ("ZZ0000000A00", 90, .buy, 20, 230),
+            ("ZZ0000000B09", 150, .buy, 30, 300),
+            ("ZZ0000000B09", 30, .sell, 30, 345),
+            ("ZZ0000000C08", 60, .buy, Decimal(string: "12.5")!, 250),
+        ] {
+            ctx.insert(FundTrade(account: funds, isin: isin, tradeDate: utcDay(daysAgo),
+                                 side: side, units: units, amountEur: amount))
+        }
 
         let connection = Connection(
             connector: .enablebanking, institutionId: "abanca",
