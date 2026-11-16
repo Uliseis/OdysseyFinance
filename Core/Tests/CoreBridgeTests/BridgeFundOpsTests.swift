@@ -181,6 +181,64 @@ final class BridgeFundOpsTests: XCTestCase {
         XCTAssertEqual(try trades(s).map(\.amountEur), [1000])
     }
 
+    func test_undoingAnImportThatPairsSwitches_putsBackEverySavedLegsGroup() throws {
+        let s = try store()
+        let earlier = BridgeFixture.utcDay(2030, 3, 25)
+        let oldGroupB = UUID(), oldGroupC = UUID()
+        // a's sale was saved as a sale to cash, with no group. b's sale and c's buy each kept
+        // the group of a switch whose other leg was deleted.
+        for (isin, day, side, units, amount, group) in [
+            (a, BridgeFixture.utcDay(2030, 1, 20), FundTradeSide.buy, Decimal(100), Decimal(1000), UUID?.none),
+            (a, BridgeFixture.utcDay(2030, 3, 10), .sell, 100, 1200, nil),
+            (b, BridgeFixture.utcDay(2030, 3, 20), .sell, 60, 1300, oldGroupB),
+            (c, BridgeFixture.utcDay(2030, 3, 22), .buy, 50, 1290, oldGroupC),
+        ] {
+            let key = "myinvestor:v1:\(day.formatted(.iso8601.year().month().day())):\(isin):\(units):\(amount)#1"
+            s.ctx.insert(FundTrade(account: s.funds, isin: isin, tradeDate: day, side: side, units: units, amountEur: amount,
+                                   switchGroupId: group, importKey: key, createdAt: earlier, updatedAt: earlier))
+        }
+        try s.ctx.save()
+        func state() throws -> [String] {
+            try trades(s).map { "\($0.id) \($0.amountEur) \($0.switchGroupId?.uuidString ?? "none")" }
+        }
+        let before = try state()
+
+        // No credit for a's sale this time, and b's buy moved no cash: a into b, then b into c.
+        let op = BridgeOp.importFundOrders(
+            accountId: s.funds.id,
+            ordersCsv: orders("22/03/2030;\(c);1290.00 EUR;50,000;Finalizada",
+                              "20/03/2030;\(b);1300.00 EUR;60,000;Finalizada",
+                              "12/03/2030;\(b);1195.00 EUR;60,000;Finalizada",
+                              "10/03/2030;\(a);1200.00 EUR;100,000;Finalizada",
+                              "20/01/2030;\(a);1000.00 EUR;100,000;Finalizada"),
+            movementsCsv: cash([("21/01/2030", "-1000")]),
+            heldUnits: [c: 50])
+        let outcome = run([op], s)
+        let shown = try XCTUnwrap(outcome.ops.first)
+        XCTAssertEqual(shown.status, .applied, shown.message)
+        XCTAssertTrue(shown.message.contains("1 new, 4 already saved"), shown.message)
+        XCTAssertTrue(shown.message.contains("2 switches (2 new)"), shown.message)
+
+        let sellA = try XCTUnwrap(try trades(s).first { $0.isin == a && $0.side == .sell })
+        let buyB = try XCTUnwrap(try trades(s).first { $0.isin == b && $0.side == .buy })
+        let sellB = try XCTUnwrap(try trades(s).first { $0.isin == b && $0.side == .sell })
+        let buyC = try XCTUnwrap(try trades(s).first { $0.isin == c })
+        let newGroup = try XCTUnwrap(sellA.switchGroupId)
+        XCTAssertEqual(buyB.switchGroupId, newGroup)
+        XCTAssertFalse([oldGroupB, oldGroupC].contains(newGroup))
+        XCTAssertEqual(sellB.switchGroupId, oldGroupB)
+        XCTAssertEqual(buyC.switchGroupId, oldGroupB, "the sale's group goes to the pair")
+        XCTAssertEqual([sellA.amountEur, sellB.amountEur], [1195, 1290])
+
+        // As the phone keeps it: in the result file, until the user taps Undo.
+        let undo = try BridgeCoding.decoder().decode([BridgeOp].self, from: BridgeCoding.encoder().encode(XCTUnwrap(outcome.undo)))
+        let reverted = run(undo, s)
+        XCTAssertEqual(reverted.ops.map(\.status), [.applied], "\(reverted.ops)")
+        XCTAssertEqual(try state(), before)
+        XCTAssertNil(sellA.switchGroupId)
+        XCTAssertEqual(buyC.switchGroupId, oldGroupC)
+    }
+
     func test_importFundOrders_refusalsSayWhy_andWriteNothing() throws {
         let s = try store()
         func refusal(_ op: BridgeOp) throws -> String {

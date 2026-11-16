@@ -50,6 +50,18 @@ final class BridgeSigningTests: XCTestCase {
         }
     }
 
+    func test_aFundImportUndo_neverComesThroughTheInbox_signedOrNot() throws {
+        let key = P256.Signing.PrivateKey()
+        let trusted = [BridgeSigning.keyId(key.publicKey): key.publicKey]
+        let undo = BridgeBatch(summary: "", ops: [.restoreFundTrades(
+            deleteIds: [UUID()], restores: [.init(id: UUID(), amountEur: 10, switchGroupId: nil)])])
+        for signer: P256.Signing.PrivateKey? in [key, nil] {
+            XCTAssertThrowsError(try BridgeSigning.open(BridgeSigning.seal(undo, with: signer), trusted: trusted)) {
+                XCTAssertEqual($0 as? BridgeEnvelopeError, .undoOnlyOp("restoreFundTrades"))
+            }
+        }
+    }
+
     func test_fingerprintIsTheKeyIdGrouped_andThePublishedKeyRoundTrips() throws {
         let key = P256.Signing.PrivateKey()
         let published = BridgeSigning.publish(key, label: "Mac")
