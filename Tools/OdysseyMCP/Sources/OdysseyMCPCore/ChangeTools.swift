@@ -38,11 +38,22 @@ extension ToolCatalog {
             - mirrorTransfer {sourceTxId, targetAccountId} (a one-off mirror leg on a manual account, no route)
             - createSharedGroupFromCredit {label, creditTxId, expenseTxIds} (a payback that covers several expenses)
             - archiveAccount {accountId, archived (default true)}
+            - importFundOrders {accountId, ordersCsvPath or ordersCsv, movementsCsvPath or movementsCsv, \
+            heldUnits: {ISIN: units held today, as the broker shows them}} (MyInvestor's orders and cash-movements \
+            exports into an investment account; all or nothing, and a refusal says why. Lists the new trades, \
+            corrected amounts and every fund's position after; fund_positions reads them back)
+            - setBrokerCashAnchor {accountId, amountEur, at} (cash at the broker at the end of that day; later cash \
+            is the anchor plus transfers, minus buys, plus sells; amountEur null clears it)
+            - setCostBasisOpening {accountId, amountEur, at} (what was already paid into an investment account \
+            before that day; transfers in after it add to cost basis; amountEur null clears it)
+            - setLiveSource {accountId, source} (where an investment account's value comes from, e.g. "funds"; null \
+            for typed valuations only; not for accounts that track a quantity)
             categorize marks rows as set by hand, so rules never refile them later. For a merchant that recurs, \
             prefer createRule plus applyRules; keep categorize for one-off rows.
             Categories are referenced by name, records by id from the read tools.
             Undo: categorize, createCategory, createRule, applyRules, recordValuation, createTransaction, \
-            mirrorTransfer, archiveAccount and the two requests can be undone from the phone. Everything else can't, and one such op takes Undo away from its whole batch, so \
+            mirrorTransfer, archiveAccount, importFundOrders, setBrokerCashAnchor, setCostBasisOpening, \
+            setLiveSource and the two requests can be undone from the phone. Everything else can't, and one such op takes Undo away from its whole batch, so \
             send those in a batch of their own. The preview's "undoable" says which you have.
             """,
              inputSchema: .object([
@@ -57,7 +68,8 @@ extension ToolCatalog {
                                 "pairTransfer", "unpairTransfer", "createSharedGroup", "deleteSharedGroup", "recordValuation",
                                 "importStatement", "deleteTransactions", "adoptFeed", "undoPensionSplit", "createRoute",
                                 "updateRoute", "deleteRoute", "requestBankSync", "requestReconnect", "createTransaction",
-                                "mirrorTransfer", "createSharedGroupFromCredit", "archiveAccount"]]),
+                                "mirrorTransfer", "createSharedGroupFromCredit", "archiveAccount", "importFundOrders",
+                                "setBrokerCashAnchor", "setCostBasisOpening", "setLiveSource"]]),
                             "txIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
                             "txId": uuid("Transaction id."), "category": string("Category name."),
                             "name": string("New category name."), "kind": string("Category kind."),
@@ -85,6 +97,15 @@ extension ToolCatalog {
                             "sourceTxId": uuid("Bank row to mirror."), "creditTxId": uuid("The payback credit."),
                             "expenseTxIds": .object(["type": "array", "items": ["type": "string", "format": "uuid"]]),
                             "archived": bool("Archive (true) or restore (false)."),
+                            "ordersCsvPath": string("Fund orders export on this Mac; the server reads it."),
+                            "ordersCsv": string("Fund orders export text, when there's no file."),
+                            "movementsCsvPath": string("Cash-movements export on this Mac; the server reads it."),
+                            "movementsCsv": string("Cash-movements export text, when there's no file."),
+                            "heldUnits": .object(["type": "object", "additionalProperties": ["type": "number"],
+                                                  "description": "Units held today per ISIN."]),
+                            "amountEur": .object(["type": ["number", "null"], "description": "EUR amount; null clears it."]),
+                            "at": date("Day the anchor or opening refers to (YYYY-MM-DD)."),
+                            "source": .object(["type": ["string", "null"], "description": "Live value source, or null."]),
                         ]),
                     ])]),
                 ]),
@@ -133,7 +154,7 @@ extension ToolCatalog {
         guard let summary = args.string("summary")?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
             throw ArgumentError("summary is required: what the batch does and why, for the review sheet")
         }
-        let ops = try Self.inlineStatements(args).decode([BridgeOp].self, key: "ops")
+        let ops = try Self.inlineFiles(args).decode([BridgeOp].self, key: "ops")
         guard !ops.isEmpty else { throw ArgumentError("ops is empty") }
         if let op = ops.first(where: \.isUndoOnly) { throw ArgumentError("\(op.name) isn't available to Claude") }
 
@@ -205,18 +226,24 @@ extension ToolCatalog {
 
     // MARK: - helpers
 
-    // A statement travels inside the batch; Claude names the file and the server reads it.
-    static func inlineStatements(_ args: Arguments) throws -> Arguments {
+    // Exports travel inside the batch; Claude names the file and the server reads it.
+    static let fileFields = [("csvPath", "csv", "statement"), ("ordersCsvPath", "ordersCsv", "orders export"),
+                             ("movementsCsvPath", "movementsCsv", "cash-movements export")]
+
+    static func inlineFiles(_ args: Arguments) throws -> Arguments {
         guard case .array(let ops)? = args.raw["ops"] else { return args }
         var raw = args.raw
         raw["ops"] = .array(try ops.map { op in
-            guard case .object(var fields) = op, case .string(let path)? = fields["csvPath"] else { return op }
-            let url = URL(filePath: (path as NSString).expandingTildeInPath)
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                throw ArgumentError("Can't read the statement at \(path)")
+            guard case .object(var fields) = op else { return op }
+            for (pathKey, textKey, what) in fileFields {
+                guard case .string(let path)? = fields[pathKey] else { continue }
+                let url = URL(filePath: (path as NSString).expandingTildeInPath)
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                    throw ArgumentError("Can't read the \(what) at \(path)")
+                }
+                fields[textKey] = .string(text)
+                fields[pathKey] = nil
             }
-            fields["csv"] = .string(text)
-            fields["csvPath"] = nil
             return .object(fields)
         })
         return try Arguments(raw)

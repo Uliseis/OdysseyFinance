@@ -51,6 +51,43 @@ final class OdysseyMCPTests: XCTestCase {
         try BridgeCoding.encoder().encode(snapshot).write(to: dir.appending(path: "snapshot.json"))
     }
 
+    // An investment account with a buy, then a switch out of it, and a broker cash anchor, plus
+    // one with no trades yet. Dates in 2030 and synthetic ISINs.
+    private let fundA = "ZZ0000000A00", fundB = "ZZ0000000B09"
+
+    private func writeFundSnapshot() throws -> (funds: UUID, empty: UUID) {
+        let schema = Schema(CoreModelSchema.allTypes)
+        let ctx = ModelContext(try ModelContainer(for: schema, configurations: [
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]))
+        let group = AccountGroup(name: "Investments", kind: .investment)
+        ctx.insert(group)
+        let account = Account(group: group, externalId: "funds", type: .broker, institution: "Example", name: "Funds",
+                              currency: "EUR", brokerCashAnchorEur: 250, brokerCashAnchorAt: Self.utcDay(2030, 1, 1))
+        let empty = Account(group: group, externalId: "new-funds", type: .broker, institution: "Example", name: "New Funds",
+                            currency: "EUR")
+        ctx.insert(account)
+        ctx.insert(empty)
+        let group1 = UUID()
+        for (isin, day, side, units, amount, switchGroup) in [
+            (fundA, Self.utcDay(2030, 1, 20), FundTradeSide.buy, Decimal(10), Decimal(100), UUID?.none),
+            (fundA, Self.utcDay(2030, 3, 10), .sell, 10, 120, group1),
+            (fundB, Self.utcDay(2030, 3, 12), .buy, Decimal(string: "6.125")!, 120, group1),
+        ] {
+            ctx.insert(FundTrade(account: account, isin: isin, tradeDate: day, side: side, units: units, amountEur: amount,
+                                 switchGroupId: switchGroup))
+        }
+        try ctx.save()
+        let snapshot = try BridgeExport.make(in: ctx, appState: .init(), redact: true, now: Self.now)
+        try BridgeCoding.encoder().encode(snapshot).write(to: dir.appending(path: "snapshot.json"))
+        return (account.id, empty.id)
+    }
+
+    nonisolated static func utcDay(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+
     private func catalog() -> ToolCatalog {
         ToolCatalog(store: SnapshotStore(files: BridgeFiles(root: dir)), keys: EphemeralSigningKeyStore(key: key),
                     now: { OdysseyMCPTests.now })
@@ -190,6 +227,96 @@ final class OdysseyMCPTests: XCTestCase {
         let missing = await c.call("propose_changes", [
             "summary": "x", "ops": [["op": "importStatement", "accountId": .string(accountId), "csvPath": "/nonexistent.csv"]]])
         XCTAssertTrue(errorText(missing).contains("Can't read the statement"))
+    }
+
+    func test_fundPositions_perFundWithSwitchesAndTheBrokerCash() async throws {
+        let ids = try writeFundSnapshot()
+        let out = try json(await catalog().call("fund_positions", ["accountId": .string(ids.funds.uuidString)]))
+        XCTAssertNotNil(out["asOf"])
+        let data = try XCTUnwrap(out["data"] as? [String: Any])
+        let funds = try XCTUnwrap(data["funds"] as? [[String: Any]])
+        let held = try XCTUnwrap(funds.first { $0["isin"] as? String == fundB })
+        XCTAssertEqual(held["held"] as? Bool, true)
+        XCTAssertEqual(held["units"] as? Double, 6.125)
+        XCTAssertEqual(held["costEur"] as? Double, 120)
+        XCTAssertEqual(held["averagePriceEur"] as? Double, 19.5918)
+        let sold = try XCTUnwrap(funds.first { $0["isin"] as? String == fundA })
+        XCTAssertEqual(sold["held"] as? Bool, false)
+        XCTAssertEqual(sold["realisedGainEur"] as? Double, 20)
+
+        let pair = try XCTUnwrap((data["switches"] as? [[String: Any]])?.first)
+        XCTAssertEqual((pair["sell"] as? [String: Any])?["isin"] as? String, fundA)
+        XCTAssertEqual((pair["buy"] as? [String: Any])?["isin"] as? String, fundB)
+
+        let cash = try XCTUnwrap(data["cash"] as? [String: Any])
+        XCTAssertEqual(cash["currentEur"] as? Double, 150)
+        XCTAssertEqual(cash["lowestEur"] as? Double, 150)
+        XCTAssertEqual(cash["lowestOn"] as? String, "2030-01-20T00:00:00Z")
+        let noAnchor = try json(await catalog().call("fund_positions", ["accountId": .string(ids.empty.uuidString)]))
+        XCTAssertNil((noAnchor["data"] as? [String: Any])?["cash"])
+
+        let missing = await catalog().call("fund_positions", [:])
+        XCTAssertTrue(errorText(missing).contains("accountId is required"))
+    }
+
+    func test_fundOrderExportsOnTheMac_travelInsideTheBatch() async throws {
+        let ids = try writeFundSnapshot()
+        let orders = dir.appending(path: "orders.csv"), movements = dir.appending(path: "movements.csv")
+        try """
+        Fecha de la orden;ISIN;Importe estimado;Nº de participaciones;Estado
+        20/03/2030;\(fundA);125.00 EUR;12,000;Finalizada
+        20/02/2030;\(fundA);205.00 EUR;20,000;Finalizada
+        15/02/2030;\(fundB);50.00 EUR;5,000;Finalizada
+        20/01/2030;\(fundA);100.00 EUR;10,000;Finalizada
+        """.write(to: orders, atomically: true, encoding: .utf8)
+        try """
+        Fecha de operación;Fecha de valor;Concepto;Importe;Divisa
+        21/03/2030;21/03/2030;EXAMPLE FUND;125;EUR
+        21/02/2030;21/02/2030;EXAMPLE FUND;-205;EUR
+        16/02/2030;16/02/2030;EXAMPLE FUND;-50;EUR
+        21/01/2030;21/01/2030;EXAMPLE FUND;-100;EUR
+        """.write(to: movements, atomically: true, encoding: .utf8)
+        func op(_ files: [String: Value]) -> Value {
+            .object(["op": "importFundOrders", "accountId": .string(ids.empty.uuidString),
+                     "heldUnits": .object([fundA: 18, fundB: 5])].merging(files) { $1 })
+        }
+
+        let byPath = try json(await catalog().call("propose_changes", [
+            "summary": "Import the fund orders",
+            "ops": [op(["ordersCsvPath": .string(orders.path), "movementsCsvPath": .string(movements.path)])]]))
+        let shown = try XCTUnwrap((byPath["ops"] as? [[String: Any]])?.first)
+        XCTAssertEqual(shown["status"] as? String, "applied", "\(shown)")
+        XCTAssertTrue((shown["message"] as? String)?.contains("4 new") ?? false, "\(shown)")
+        XCTAssertEqual(byPath["undoable"] as? Bool, true)
+
+        let mixed = try json(await catalog().call("propose_changes", [
+            "summary": "x", "ops": [op(["ordersCsv": .string(try String(contentsOf: orders, encoding: .utf8)),
+                                        "movementsCsvPath": .string(movements.path)])]]))
+        XCTAssertEqual((mixed["ops"] as? [[String: Any]])?.first?["status"] as? String, "applied")
+
+        let refused = try json(await catalog().call("propose_changes", [
+            "summary": "x", "ops": [op(["ordersCsvPath": .string(orders.path), "movementsCsvPath": .string(orders.path)])]]))
+        let failed = try XCTUnwrap((refused["ops"] as? [[String: Any]])?.first)
+        XCTAssertEqual(failed["status"] as? String, "failed")
+        XCTAssertTrue((failed["message"] as? String)?.hasPrefix("Import refused: the cash-movements export's header") ?? false, "\(failed)")
+
+        let missing = await catalog().call("propose_changes", [
+            "summary": "x", "ops": [op(["ordersCsvPath": "/nonexistent.csv", "movementsCsvPath": .string(movements.path)])]])
+        XCTAssertTrue(errorText(missing).contains("Can't read the orders export at /nonexistent.csv"))
+    }
+
+    func test_investmentSettingsCanBeProposed_andUndone() async throws {
+        let ids = try writeFundSnapshot()
+        let account = Value.string(ids.funds.uuidString)
+        let out = try json(await catalog().call("propose_changes", [
+            "summary": "Correct the fund account's figures",
+            "ops": [["op": "setBrokerCashAnchor", "accountId": account, "amountEur": 300, "at": "2030-01-01"],
+                    ["op": "setCostBasisOpening", "accountId": account, "amountEur": 1000, "at": "2029-12-31"],
+                    ["op": "setLiveSource", "accountId": account, "source": "funds"]]]))
+        let ops = try XCTUnwrap(out["ops"] as? [[String: Any]])
+        XCTAssertEqual(ops.compactMap { $0["status"] as? String }, ["applied", "applied", "applied"], "\(ops)")
+        XCTAssertTrue((ops[0]["message"] as? String)?.contains("now 200 EUR") ?? false, "\(ops[0])")
+        XCTAssertEqual(out["undoable"] as? Bool, true)
     }
 
     func test_whatThePhoneWillDo_followsItsSettingsAndPairing() async throws {

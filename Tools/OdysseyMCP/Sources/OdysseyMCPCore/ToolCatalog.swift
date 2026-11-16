@@ -95,6 +95,16 @@ public final class ToolCatalog {
              "For an expense: credits near it that could be paybacks. For a credit: expenses it could be repaying. Same space, not yet in a shared group.",
              ["txId": uuid("The expense or the credit."), "query": string("Optional text filter.")],
              required: ["txId"]),
+        tool("fund_positions",
+             """
+             An investment account's funds, rebuilt from its imported broker orders: per fund (ISIN) the \
+             units held, first-in-first-out cost, average price, realised gain and whether it's still held \
+             or sold out, and each switch's sell and buy legs. With a broker cash anchor set, the cash \
+             ledger's current balance and its lowest point with the day; below zero means a sale or a \
+             transfer in is missing.
+             """,
+             ["accountId": uuid("Investment account.")],
+             required: ["accountId"]),
         tool("sync_status", "Bank connections (status, consent expiry, last sync, last error) and the latest sync runs.", [:]),
         tool("snapshot_age",
              "When the phone last wrote the snapshot, and where it is. Cheap; doesn't load the data.", [:]),
@@ -126,6 +136,9 @@ public final class ToolCatalog {
             case "payback_candidates":
                 guard let txId = try args.uuid("txId") else { throw ArgumentError("txId is required") }
                 data = try replica.paybackCandidates(txId: txId, query: args.string("query") ?? "")
+            case "fund_positions":
+                guard let accountId = try args.uuid("accountId") else { throw ArgumentError("accountId is required") }
+                data = try replica.fundPositions(accountId: accountId)
             case "sync_status": data = try replica.syncStatus(now: now)
             default: throw ArgumentError("Unknown tool \(name)")
             }
