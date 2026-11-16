@@ -11,7 +11,10 @@ extension CoreLogic {
     public enum InvestmentRefresh {
         public struct Outcome: Equatable, Sendable {
             public var updated: [UUID] = []
+            // Values that weren't saved, and why.
             public var failures: [String] = []
+            // Worth knowing but nothing refused, like a value saved from a cached price.
+            public var notices: [String] = []
         }
 
         public static let cryptoPrefix = "crypto:"
@@ -183,7 +186,7 @@ extension CoreLogic {
                 Set(ready.flatMap { $0.held.map(\.isin) }).sorted(),
                 store: store, source: makeSource(apiKey), today: today)
             let cache = refresh.cache
-            if let why = refresh.saveFailure { outcome.failures.append("Fund prices weren't cached: \(why)") }
+            if let why = refresh.saveFailure { outcome.notices.append("Fund prices weren't cached: \(why)") }
 
             var values: [UUID: (market: Decimal, cash: Decimal)] = [:]
             var notices: Set<String> = []
@@ -218,7 +221,7 @@ extension CoreLogic {
                     outcome.failures.append("\(account.displayName): \(problems.joined(separator: "; ")); not saved.")
                 }
             }
-            outcome.failures += notices.sorted()
+            outcome.notices += notices.sorted()
             return values
         }
 

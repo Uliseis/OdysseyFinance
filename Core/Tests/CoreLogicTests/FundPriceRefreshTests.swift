@@ -119,6 +119,19 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(cache.saves.dropFirst().first?.funds[a]?.price, d("7.4321"))
     }
 
+    func testACacheThatCantBeSavedIsANoticeOnce() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cache.saveError = CocoaError(.fileWriteNoPermission)
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.updated, [acc.id])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices.count, 1, "\(outcome.notices)")
+        XCTAssertTrue(outcome.notices[0].contains("weren't cached"), outcome.notices[0])
+    }
+
     func testNameAndCurrencyAreLookedUpOnce() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
@@ -151,9 +164,11 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(cache.cache.funds[b]?.price, d("2.05"), "B keeps its cached price")
         XCTAssertEqual(outcome.updated, [acc.id], "a cached price a day old still values the account")
         XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("108.021"), "10 × 7.4321 + 4 × 2.05 + 25.50")
-        XCTAssertEqual(outcome.failures.count, 1)
-        XCTAssertTrue(outcome.failures[0].contains("Example Fund B"), outcome.failures[0])
-        XCTAssertFalse(outcome.failures[0].contains("Example Fund A"), outcome.failures[0])
+        XCTAssertEqual(outcome.failures, [], "a value saved from a cached price is no failure")
+        XCTAssertEqual(outcome.notices.count, 1)
+        XCTAssertTrue(outcome.notices[0].contains("Example Fund B"), outcome.notices[0])
+        XCTAssertTrue(outcome.notices[0].contains("no EODHD requests left today"), outcome.notices[0])
+        XCTAssertFalse(outcome.notices[0].contains("Example Fund A"), outcome.notices[0])
 
         _ = await run(ctx, at: day(14).addingTimeInterval(3600))
         XCTAssertEqual(source.latests, [a, a, b], "the next UTC day fetches both again")
@@ -366,9 +381,11 @@ private final class FakeFundSource: FundPriceSource {
 private final class MemoryFundPriceCache: FundPriceCacheStore {
     var cache = CoreLogic.FundPriceCache()
     var unreadable = false
+    var saveError: (any Error)?
     private(set) var saves: [CoreLogic.FundPriceCache] = []
     func load() -> CoreLogic.FundPriceCache? { unreadable ? nil : cache }
     func save(_ cache: CoreLogic.FundPriceCache) throws {
+        if let saveError { throw saveError }
         self.cache = cache
         unreadable = false
         saves.append(cache)
