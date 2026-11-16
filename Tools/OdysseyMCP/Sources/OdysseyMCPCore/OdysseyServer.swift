@@ -6,9 +6,10 @@ public enum OdysseyServer {
 
     static let instructions = """
         Odyssey Finance is the user's personal finance app on their iPhone. These tools read a snapshot \
-        the phone writes to iCloud Drive whenever the app is opened or syncs its banks, so data can be \
-        stale: every answer carries `asOf`, and overview reports snapshotAgeMinutes. If it's old, ask the \
-        user to open the app. Amounts are EUR unless a currency says otherwise; debits are negative. \
+        the phone writes to iCloud Drive when the app is opened or syncs its banks, so data can be \
+        stale: every answer carries `asOf`, and overview reports snapshotAgeMinutes. The phone rewrites \
+        unchanged data only once an hour, so an age under an hour is as fresh as it gets. If it's older, \
+        ask the user to open the app. Amounts are EUR unless a currency says otherwise; debits are negative. \
         Before categorizing or pairing anything, read the odyssey://policy resource and follow it.
         To change data: propose_changes previews a batch on a private copy, you show the user the \
         preview, and submit_changes sends it to the phone, where the user approves it with Face ID \

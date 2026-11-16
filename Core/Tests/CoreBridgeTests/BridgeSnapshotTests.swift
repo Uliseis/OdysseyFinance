@@ -118,4 +118,49 @@ final class BridgeSnapshotTests: XCTestCase {
         XCTAssertEqual(state.cycleStartDay, 20)
         XCTAssertNil(state.claude)
     }
+
+    // MARK: - rewrite only on change
+
+    private func written(_ s: BridgeSnapshot) throws -> BridgeSnapshot {
+        try BridgeCoding.decoder().decode(BridgeSnapshot.self, from: BridgeCoding.encoder().encode(s))
+    }
+
+    func test_needsWrite_noFile_writes() throws {
+        let f = try BridgeFixture()
+        XCTAssertTrue(try export(f.ctx, redact: true).needsWrite(over: nil))
+    }
+
+    func test_needsWrite_sameDataMinutesLater_skipsEvenInAnotherOrder() throws {
+        let f = try BridgeFixture()
+        let old = try written(export(f.ctx, redact: true))
+        var new = try BridgeExport.make(in: f.ctx, appState: BridgeFixture.appState, redact: true,
+                                        now: BridgeFixture.now.addingTimeInterval(10 * 60))
+        new.transactions.reverse()
+        new.accounts.reverse()
+        XCTAssertFalse(new.needsWrite(over: old))
+    }
+
+    func test_needsWrite_sameDataAfterAnHour_writes() throws {
+        let f = try BridgeFixture()
+        let old = try written(export(f.ctx, redact: true))
+        let new = try BridgeExport.make(in: f.ctx, appState: BridgeFixture.appState, redact: true,
+                                        now: BridgeFixture.now.addingTimeInterval(BridgeSnapshot.unchangedRewriteInterval))
+        XCTAssertTrue(new.needsWrite(over: old))
+    }
+
+    func test_needsWrite_changedRowOrSetting_writes() throws {
+        let f = try BridgeFixture()
+        let old = try written(export(f.ctx, redact: true))
+
+        f.bankRow.category = f.restaurants
+        try f.ctx.save()
+        XCTAssertTrue(try export(f.ctx, redact: true).needsWrite(over: old))
+
+        f.bankRow.category = f.groceries
+        try f.ctx.save()
+        var settings = BridgeFixture.appState
+        settings.cycleStartDay = 1
+        let new = try BridgeExport.make(in: f.ctx, appState: settings, redact: true, now: BridgeFixture.now)
+        XCTAssertTrue(new.needsWrite(over: old))
+    }
 }
