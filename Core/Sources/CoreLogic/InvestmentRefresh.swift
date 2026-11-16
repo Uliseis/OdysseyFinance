@@ -186,6 +186,7 @@ extension CoreLogic {
                 Set(ready.flatMap { $0.held.map(\.isin) }).sorted(),
                 store: store, source: makeSource(apiKey), today: today)
             let cache = refresh.cache
+            if refresh.keyRejected { outcome.failures.append("EODHD rejected the key; check it in Settings.") }
             if let why = refresh.saveFailure { outcome.notices.append("Fund prices weren't cached: \(why)") }
 
             var values: [UUID: (market: Decimal, cash: Decimal)] = [:]
@@ -232,6 +233,7 @@ extension CoreLogic {
             var cache: FundPriceCache
             // By ISIN: why a fund's cached price, if it has one, wasn't refreshed.
             var notRefreshed: [String: String] = [:]
+            var keyRejected = false
             var saveFailure: String?
         }
 
@@ -257,10 +259,30 @@ extension CoreLogic {
             if result.cache.requestDay != today {
                 result.cache.requestDay = today
                 result.cache.requestCount = 0
+                result.cache.failedLookups = [:]
             }
             let capReached = "no EODHD requests left today"
+            let notListed = "EODHD doesn't list this ISIN as a fund"
+            // A rejected key fails every request the same way, so it ends the run's requests.
+            func keepFetching(after error: any Error, isin: String, notFound: String) -> Bool {
+                switch error as? FundPriceError {
+                case .unauthorized:
+                    result.keyRejected = true
+                    return false
+                case .rateLimited:
+                    result.cache.requestCount = fundRequestsPerDay
+                default:
+                    break
+                }
+                result.notRefreshed[isin] = describe(error, notFound: notFound)
+                return true
+            }
             for isin in isins {
                 if result.cache.funds[isin] == nil {
+                    if result.cache.failedLookups[isin] == today {
+                        result.notRefreshed[isin] = notListed
+                        continue
+                    }
                     guard result.cache.requestCount < fundRequestsPerDay else {
                         result.notRefreshed[isin] = capReached
                         continue
@@ -271,9 +293,8 @@ extension CoreLogic {
                         let info = try await source.lookup(isin: isin)
                         result.cache.funds[isin] = FundPriceCache.Entry(name: info.name, currency: info.currency)
                     } catch {
-                        if error as? FundPriceError == .rateLimited { result.cache.requestCount = fundRequestsPerDay }
-                        result.notRefreshed[isin] = describe(error, notFound: "EODHD doesn't list this ISIN as a fund")
-                        continue
+                        if error as? FundPriceError == .notFound { result.cache.failedLookups[isin] = today }
+                        if keepFetching(after: error, isin: isin, notFound: notListed) { continue } else { break }
                     }
                 }
                 guard var entry = result.cache.funds[isin], entry.currency == "EUR", entry.fetchedDay != today else {
@@ -291,8 +312,11 @@ extension CoreLogic {
                     accept(quote, into: &entry)
                     result.cache.funds[isin] = entry
                 } catch {
-                    if error as? FundPriceError == .rateLimited { result.cache.requestCount = fundRequestsPerDay }
-                    result.notRefreshed[isin] = describe(error, notFound: "EODHD has no recent price for it")
+                    if error as? FundPriceError == .notFound {
+                        entry.fetchedDay = today
+                        result.cache.funds[isin] = entry
+                    }
+                    if !keepFetching(after: error, isin: isin, notFound: "EODHD has no recent price for it") { break }
                 }
             }
             return result

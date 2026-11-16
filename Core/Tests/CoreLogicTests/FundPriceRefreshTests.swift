@@ -195,7 +195,7 @@ final class FundPriceRefreshTests: XCTestCase {
     func testTheDailyLimitAnswerStopsRequestsForTheDay() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
-        source.latestErrors[a] = .rateLimited
+        source.latestErrors[a] = FundPriceError.rateLimited
 
         let outcome = await run(ctx)
 
@@ -206,6 +206,71 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(outcome.failures.count, 1)
         XCTAssertTrue(outcome.failures[0].contains("Example Fund A"), outcome.failures[0])
         XCTAssertTrue(outcome.failures[0].contains(b), "B was never looked up, so its ISIN names it")
+    }
+
+    func testARejectedKeyStopsTheRunsRequestsAndIsReportedOnce() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        source.lookupErrors[a] = FundPriceError.unauthorized
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(source.lookups, [a], "no request for B after EODHD rejects the key")
+        XCTAssertEqual(source.latests, [])
+        XCTAssertEqual(cache.cache.requestCount, 1)
+        XCTAssertTrue(outcome.updated.isEmpty)
+        XCTAssertEqual(outcome.failures.first, "EODHD rejected the key; check it in Settings.")
+        XCTAssertEqual(outcome.failures.filter { $0.contains("key") }.count, 1, "\(outcome.failures)")
+        XCTAssertEqual(outcome.notices.filter { $0.contains("key") }, [])
+    }
+
+    func testARejectedKeyStillValuesFromFreshCachedPrices() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cache.cache.funds = [
+            a: Entry(name: "Example Fund A", currency: "EUR", price: d("7.4"), priceDay: day(12), fetchedDay: day(12)),
+            b: Entry(name: "Example Fund B", currency: "EUR", price: d("2.05"), priceDay: day(12), fetchedDay: day(12)),
+        ]
+        source.latestErrors[a] = FundPriceError.unauthorized
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(source.latests, [a])
+        XCTAssertEqual(outcome.updated, [acc.id])
+        XCTAssertEqual(outcome.failures, ["EODHD rejected the key; check it in Settings."])
+    }
+
+    func testAPriceEODHDDoesntHaveIsAskedForOnceADay() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        source.quotes[b] = nil
+
+        let first = await run(ctx)
+        _ = await run(ctx, at: now.addingTimeInterval(8 * 3600))
+
+        XCTAssertTrue(first.failures.first?.contains("EODHD has no recent price for it") == true, "\(first.failures)")
+        XCTAssertEqual(source.latests, [a, b], "the second run asks again for neither")
+        XCTAssertEqual(cache.cache.requestCount, 4)
+
+        _ = await run(ctx, at: day(14).addingTimeInterval(3600))
+        XCTAssertEqual(source.latests, [a, b, a, b])
+    }
+
+    func testAFundEODHDDoesntListIsLookedUpOnceADay() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        source.infos[b] = nil
+
+        _ = await run(ctx)
+        let second = await run(ctx, at: now.addingTimeInterval(8 * 3600))
+
+        XCTAssertEqual(source.lookups, [a, b])
+        XCTAssertEqual(cache.cache.requestCount, 3)
+        XCTAssertTrue(second.failures.first?.contains("\(b): no price yet (EODHD doesn't list this ISIN as a fund)") == true,
+                      "\(second.failures)")
+
+        _ = await run(ctx, at: day(14).addingTimeInterval(3600))
+        XCTAssertEqual(source.lookups, [a, b, b])
     }
 
     func testAStalePriceIsRefused() async throws {
@@ -462,12 +527,14 @@ final class FundPriceRefreshTests: XCTestCase {
 private final class FakeFundSource: FundPriceSource {
     var infos: [String: FundInfo] = [:]
     var quotes: [String: FundQuote] = [:]
-    var latestErrors: [String: FundPriceError] = [:]
+    var lookupErrors: [String: any Error] = [:]
+    var latestErrors: [String: any Error] = [:]
     private(set) var lookups: [String] = []
     private(set) var latests: [String] = []
 
     func lookup(isin: String) async throws -> FundInfo {
         lookups.append(isin)
+        if let error = lookupErrors[isin] { throw error }
         guard let info = infos[isin] else { throw FundPriceError.notFound }
         return info
     }
