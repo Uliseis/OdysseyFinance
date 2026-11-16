@@ -18,21 +18,22 @@ struct RecordValuationView: View {
     @State private var basisText = ""
     @State private var basisAt = Date.now
     @State private var source = LiveSource.manual
-    // A live source this sheet can't show (funds): kept on save unless another one is picked.
-    @State private var keptSource: String?
     @State private var coinText = "bitcoin"
     @State private var quantityText = ""
+    @State private var brokerCashText = ""
+    @State private var brokerCashAt = Date.now
     @State private var saveError: String?
     @State private var loaded = false
 
     enum LiveSource: String, CaseIterable, Identifiable {
-        case manual, trading212, crypto
+        case manual, trading212, crypto, funds
         var id: String { rawValue }
         var label: String {
             switch self {
             case .manual: "Enter by hand"
             case .trading212: "Trading 212"
             case .crypto: "Crypto price"
+            case .funds: "Fund prices"
             }
         }
     }
@@ -49,6 +50,14 @@ struct RecordValuationView: View {
     private var quantity: Decimal? {
         quantityText.trimmingCharacters(in: .whitespaces).isEmpty
             ? nil : CoreLogic.Transactions.parseQuantity(quantityText)
+    }
+
+    // Not parseAmount: with everything invested the cash is zero, and that's a real anchor.
+    private var brokerCash: Decimal? {
+        CoreLogic.Transactions.parseSignedAmount(brokerCashText).flatMap { $0 >= 0 ? $0 : nil }
+    }
+    private var brokerCashIsInvalid: Bool {
+        !brokerCashText.trimmingCharacters(in: .whitespaces).isEmpty && brokerCash == nil
     }
 
     private func optionalAmount(_ text: String) -> Decimal? {
@@ -90,7 +99,7 @@ struct RecordValuationView: View {
     private var valueSection: some View {
         Section {
             LabeledContent("Market value") {
-                TextField(source == .manual && keptSource == nil ? "0" : "Fetched automatically", text: $marketText)
+                TextField(source == .manual ? "0" : "Fetched automatically", text: $marketText)
                     .multilineTextAlignment(.trailing)
                     .font(.readout(.title3))
                     .keyboardType(.decimalPad)
@@ -212,16 +221,26 @@ struct RecordValuationView: View {
                         .keyboardType(.decimalPad)
                 }
             }
+            if source == .funds {
+                LabeledContent("Cash at MyInvestor") {
+                    TextField("0", text: $brokerCashText)
+                        .multilineTextAlignment(.trailing)
+                        .font(.readout(.body, weight: .regular))
+                        .keyboardType(.decimalPad)
+                        .foregroundStyle(brokerCashIsInvalid ? Color.negativeAmount : Color.primary)
+                }
+                DatePicker("At the end of", selection: $brokerCashAt, displayedComponents: .date)
+            }
         } footer: {
             switch source {
-            case .manual where keptSource != nil:
-                Text("Valued automatically each time you open the app. Picking another source here replaces it.")
             case .manual:
                 Text("You'll enter the value yourself whenever you want to update it.")
             case .trading212:
                 Text("Refreshed from Trading 212 each time you open the app. Add your API key in Settings → Trading 212.")
             case .crypto:
                 Text("Value = quantity × today's price, refreshed when you open the app. Use the CoinGecko id, e.g. bitcoin or ethereum. Update the quantity whenever you buy or sell.")
+            case .funds:
+                Text("Value = the units held from the imported MyInvestor orders × each fund's latest price, plus the cash at MyInvestor, refreshed when you open the app. Enter the cash once, as MyInvestor shows it at the end of that day; transfers and orders after it are counted for you. Add the EODHD key in Settings → Fund Prices.")
             }
         }
     }
@@ -269,14 +288,18 @@ struct RecordValuationView: View {
         if let live = account.liveValueSource {
             if live == CoreLogic.InvestmentRefresh.trading212Source {
                 source = .trading212
+            } else if live == CoreLogic.InvestmentRefresh.fundsSource {
+                source = .funds
             } else if let coin = CoreLogic.InvestmentRefresh.coinId(from: live) {
                 source = .crypto
                 coinText = coin
-            } else {
-                keptSource = live
             }
         }
         if let qty = account.assetQuantity { quantityText = decimalField(qty) }
+        if let cash = account.brokerCashAnchorEur {
+            brokerCashText = Money.plainAmountText(cash)
+            brokerCashAt = account.brokerCashAnchorAt.map(localDay(ofUTC:)) ?? .now
+        }
     }
 
     // No grouping, so nothing has to be parsed back out; locale separator like every other
@@ -308,18 +331,25 @@ struct RecordValuationView: View {
     }
 
     private func save() {
+        if source == .funds && brokerCashIsInvalid {
+            saveError = "Enter the cash at MyInvestor as an amount, like 250,00."
+            return
+        }
         do {
             try CoreLogic.Investments.setCostBasisOpening(
                 account, amountEur: basis, at: basisAt, in: ctx)
-            if source != .manual || keptSource == nil {
-                let liveSource: String? = switch source {
-                case .manual: nil
-                case .trading212: CoreLogic.InvestmentRefresh.trading212Source
-                case .crypto: CoreLogic.InvestmentRefresh.cryptoPrefix
-                    + coinText.trimmingCharacters(in: .whitespaces).lowercased()
-                }
-                try CoreLogic.Investments.setLiveSource(
-                    account, source: liveSource, quantity: quantity, in: ctx)
+            let liveSource: String? = switch source {
+            case .manual: nil
+            case .trading212: CoreLogic.InvestmentRefresh.trading212Source
+            case .crypto: CoreLogic.InvestmentRefresh.cryptoPrefix
+                + coinText.trimmingCharacters(in: .whitespaces).lowercased()
+            case .funds: CoreLogic.InvestmentRefresh.fundsSource
+            }
+            try CoreLogic.Investments.setLiveSource(
+                account, source: liveSource, quantity: source == .crypto ? quantity : nil, in: ctx)
+            if source == .funds {
+                try CoreLogic.FundTrades.setBrokerCashAnchor(
+                    account, amountEur: brokerCash, at: utcDay(ofLocal: brokerCashAt), in: ctx)
             }
             if let market {
                 try CoreLogic.Investments.recordValuation(
@@ -330,6 +360,20 @@ struct RecordValuationView: View {
         } catch {
             saveError = "The changes weren’t saved."
         }
+    }
+
+    // The anchor is pinned to a UTC day, and the day picked is the one meant: just after local
+    // midnight the picker's instant still falls on the previous UTC day.
+    private func utcDay(ofLocal date: Date) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = .gmt
+        return utc.date(from: Calendar.current.dateComponents([.year, .month, .day], from: date))!
+    }
+
+    private func localDay(ofUTC day: Date) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = .gmt
+        return Calendar.current.date(from: utc.dateComponents([.year, .month, .day], from: day))!
     }
 
     // The picker is date-only; a valuation dated D must include every leg booked on D,
