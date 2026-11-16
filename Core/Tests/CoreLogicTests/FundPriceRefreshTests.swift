@@ -62,12 +62,14 @@ final class FundPriceRefreshTests: XCTestCase {
         return acc
     }
 
-    private func run(_ ctx: ModelContext, at time: Date? = nil) async -> R.Outcome {
+    private func run(
+        _ ctx: ModelContext, at time: Date? = nil, store: (any FundPriceCacheStore)? = nil
+    ) async -> R.Outcome {
         let source = self.source!
         return await R.run(in: ctx, keychain: keys!, fundPrices: { [key] apiKey in
             XCTAssertEqual(apiKey, key)
             return source
-        }, fundPriceCache: cache, now: time ?? now)
+        }, fundPriceCache: store ?? cache, now: time ?? now)
     }
 
     private func valuations(_ acc: Account, _ ctx: ModelContext) throws -> [PortfolioValuation] {
@@ -174,22 +176,22 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(source.latests, [a, a, b], "the next UTC day fetches both again")
     }
 
-    func testAnUnreadableCacheMakesNoRequestsUntilTheNextDay() async throws {
+    func testAnUnreadableCacheMakesNoRequestsAndIsLeftAsItIs() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
-        cache.unreadable = true
+        let dir = FileManager.default.temporaryDirectory.appending(path: "fund-price-refresh-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appending(path: "fund-prices.json")
+        let unreadable = Data(#"{"funds": {"\#(a)": {"name": "Example Fund A", "currency": "EUR"}}}"#.utf8)
+        try unreadable.write(to: url)
 
-        let outcome = await run(ctx)
+        let outcome = await run(ctx, store: FundPriceCacheFile(url: url))
 
-        XCTAssertEqual(source.lookups + source.latests, [])
-        XCTAssertFalse(cache.unreadable, "the file is rewritten")
-        XCTAssertEqual(cache.cache.requestDay, day(13))
-        XCTAssertEqual(cache.cache.requestCount, R.fundRequestsPerDay, "and keeps today's requests used up")
+        XCTAssertEqual(source.lookups + source.latests, [], "it can't say how many requests today made")
+        XCTAssertEqual(try Data(contentsOf: url), unreadable, "an empty cache would drop its prices and held jumps")
         XCTAssertTrue(outcome.updated.isEmpty)
         XCTAssertEqual(try valuations(acc, ctx).count, 0)
-
-        _ = await run(ctx, at: day(14).addingTimeInterval(3600))
-        XCTAssertEqual(source.lookups, [a, b], "the next UTC day fetches again")
     }
 
     func testTheDailyLimitAnswerStopsRequestsForTheDay() async throws {
@@ -616,14 +618,12 @@ private final class FakeFundSource: FundPriceSource {
 
 private final class MemoryFundPriceCache: FundPriceCacheStore {
     var cache = CoreLogic.FundPriceCache()
-    var unreadable = false
     var saveError: (any Error)?
     private(set) var saves: [CoreLogic.FundPriceCache] = []
-    func load() -> CoreLogic.FundPriceCache? { unreadable ? nil : cache }
+    func load() -> CoreLogic.FundPriceCache? { cache }
     func save(_ cache: CoreLogic.FundPriceCache) throws {
         if let saveError { throw saveError }
         self.cache = cache
-        unreadable = false
         saves.append(cache)
     }
 }
