@@ -26,6 +26,8 @@ public struct BridgeSnapshot: Codable, Sendable, Equatable {
     public var transactions: [TransactionSnapshot]
     public var sharedExpenseGroups: [SharedExpenseGroupSnapshot]
     public var portfolioValuations: [PortfolioValuationSnapshot]
+    // Optional so snapshots written before fund trades still decode; nil reads as none.
+    public var fundTrades: [FundTradeSnapshot]?
     public var syncRuns: [SyncRunSnapshot]
     // What a redacted file keeps of each dropped bank payload.
     public var bankDetails: [BankDetail]
@@ -126,6 +128,7 @@ extension BridgeSnapshot {
         s.transactions = s.transactions.sorted { $0.id.uuidString < $1.id.uuidString }
         s.sharedExpenseGroups = s.sharedExpenseGroups.sorted { $0.id.uuidString < $1.id.uuidString }
         s.portfolioValuations = s.portfolioValuations.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.fundTrades = s.fundTrades?.sorted { $0.id.uuidString < $1.id.uuidString }
         s.syncRuns = s.syncRuns.sorted { $0.id.uuidString < $1.id.uuidString }
         s.bankDetails = s.bankDetails.sorted { $0.txId.uuidString < $1.txId.uuidString }
         return s

@@ -52,6 +52,7 @@ public enum BridgeExport {
             transactions: transactions,
             sharedExpenseGroups: try ctx.fetch(FetchDescriptor<SharedExpenseGroup>()).map(ModelSnapshots.snapshot),
             portfolioValuations: try ctx.fetch(FetchDescriptor<PortfolioValuation>()).map(ModelSnapshots.snapshot),
+            fundTrades: try ctx.fetch(FetchDescriptor<FundTrade>()).map(ModelSnapshots.snapshot),
             syncRuns: try ctx.fetch(runs).map { redact ? ModelSnapshots.snapshot($0).withRawJSON(nil) : ModelSnapshots.snapshot($0) },
             bankDetails: bankDetails
         )
