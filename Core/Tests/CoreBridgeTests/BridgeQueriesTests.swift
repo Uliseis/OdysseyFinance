@@ -143,4 +143,38 @@ final class BridgeQueriesTests: XCTestCase {
         XCTAssertTrue(candidates.contains { $0.description == "UNKNOWN CREDIT" })
         XCTAssertFalse(candidates.contains { $0.description == "PAYBACK FROM FRIEND" }, "already in a shared group")
     }
+
+    func test_fundPositions_perFundFiguresSwitchesAndTheCashLedger() throws {
+        let f = try BridgeFixture()
+        let p = try replica(f).fundPositions(accountId: f.broker.id)
+        XCTAssertEqual(p.account, "Broker")
+        XCTAssertEqual(p.trades, 3)
+
+        let sold = try XCTUnwrap(p.funds.first { $0.isin == BridgeFixture.fundA })
+        XCTAssertFalse(sold.held)
+        XCTAssertEqual(sold.units, 0)
+        XCTAssertNil(sold.averagePriceEur)
+        XCTAssertEqual(sold.realisedGainEur, 20)
+        let held = try XCTUnwrap(p.funds.first { $0.isin == BridgeFixture.fundB })
+        XCTAssertTrue(held.held)
+        XCTAssertEqual(held.units, Decimal(string: "6.125"))
+        XCTAssertEqual(held.costEur, 120)
+        XCTAssertEqual(held.averagePriceEur, Decimal(string: "19.5918"), "120 / 6.125, to four decimals")
+
+        let pair = try XCTUnwrap(p.switches.first)
+        XCTAssertEqual(p.switches.count, 1)
+        XCTAssertEqual(pair.sell?.isin, BridgeFixture.fundA)
+        XCTAssertEqual(pair.buy?.isin, BridgeFixture.fundB)
+        XCTAssertEqual(pair.buy?.date, BridgeFixture.utcDay(2030, 3, 12))
+
+        // 250 at the anchor, −100 for the buy, +120 −120 for the switch.
+        let cash = try XCTUnwrap(p.cash)
+        XCTAssertEqual(cash.anchorEur, 250)
+        XCTAssertEqual(cash.currentEur, 150)
+        XCTAssertEqual(cash.lowestEur, 150)
+        XCTAssertEqual(cash.lowestOn, BridgeFixture.utcDay(2030, 1, 20))
+
+        XCTAssertNil(try replica(f).fundPositions(accountId: f.checking.id).cash)
+        XCTAssertThrowsError(try replica(f).fundPositions(accountId: UUID()))
+    }
 }
