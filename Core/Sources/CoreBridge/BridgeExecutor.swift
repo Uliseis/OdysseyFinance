@@ -482,24 +482,28 @@ public enum BridgeExecutor {
             let account = try investmentAccount(accountId, in: ctx)
             let trimmed = source?.trimmingCharacters(in: .whitespacesAndNewlines)
             let wanted = (trimmed?.isEmpty ?? true) ? nil : trimmed
-            guard wanted != account.liveValueSource else {
-                step.message = "Already \(wanted ?? "typed valuations")"
-                return
-            }
-            // The op carries no quantity: a crypto source would value nothing, and dropping a
-            // quantity couldn't be undone.
-            guard account.assetQuantity == nil else {
-                throw BridgeExecutorError.invalid("\(account.displayName) tracks a quantity for its live price; change its source on the phone")
-            }
+            // The op carries no quantity, and a crypto source values nothing without one.
             if wanted?.hasPrefix(CoreLogic.InvestmentRefresh.cryptoPrefix) == true {
                 throw BridgeExecutorError.invalid("A crypto source needs a quantity; set it on the phone")
+            }
+            if let wanted, wanted != CoreLogic.InvestmentRefresh.trading212Source, wanted != fundsSource {
+                throw BridgeExecutorError.invalid(
+                    #"Unknown source "\#(wanted)": use "funds" (fund prices), "t212" (Trading 212) or null (typed valuations only)"#)
+            }
+            guard wanted != account.liveValueSource else {
+                step.message = "Already \(sourceText(wanted))"
+                return
+            }
+            // Changing the source drops the quantity, which undo couldn't put back.
+            guard account.assetQuantity == nil else {
+                throw BridgeExecutorError.invalid("\(account.displayName) tracks a quantity for its live price; change its source on the phone")
             }
             let was = account.liveValueSource
             try CoreLogic.Investments.setLiveSource(account, source: wanted, quantity: nil, in: ctx)
             step.changes = [BridgeChange(id: accountId, label: "\(account.displayName) value",
-                                         before: was ?? "typed valuations", after: wanted ?? "typed valuations")]
+                                         before: sourceText(was), after: sourceText(wanted))]
             step.undo = [.setLiveSource(accountId: accountId, source: was)]
-            step.message = wanted.map { "The phone refreshes its value from \($0)" } ?? "Valued by typed valuations only"
+            step.message = wanted == nil ? "Valued by typed valuations only" : "The phone values it from \(sourceText(wanted))"
 
         case .restoreCategories(let restores):
             for r in restores {
@@ -674,6 +678,18 @@ public enum BridgeExecutor {
 
     private static func positionText(_ p: CoreLogic.Funds.Position) -> String {
         (p.units > 0 ? "\(p.units) units · cost \(toCents(p.costEur)) EUR" : "sold") + " · realised \(toCents(p.realisedGainEur)) EUR"
+    }
+
+    // Becomes CoreLogic.InvestmentRefresh.fundsSource once the fund-prices change is merged.
+    private static let fundsSource = "funds"
+
+    private static func sourceText(_ source: String?) -> String {
+        switch source {
+        case nil: "typed valuations"
+        case CoreLogic.InvestmentRefresh.trading212Source: "Trading 212"
+        case fundsSource: "fund prices (EODHD)"
+        case let other?: other
+        }
     }
 
     private static func anchorText(_ amount: Decimal?, _ day: Date?, _ relation: String) -> String? {

@@ -46,8 +46,10 @@ extension ToolCatalog {
             is the anchor plus transfers, minus buys, plus sells; amountEur null clears it)
             - setCostBasisOpening {accountId, amountEur, at} (what was already paid into an investment account \
             before that day; transfers in after it add to cost basis; amountEur null clears it)
-            - setLiveSource {accountId, source} (where an investment account's value comes from, e.g. "funds"; null \
-            for typed valuations only; not for accounts that track a quantity)
+            - setLiveSource {accountId, source: "funds" | "t212" | null} (where an investment account's value comes \
+            from: "funds" = the phone values its fund positions from fund prices (EODHD), "t212" = the Trading 212 \
+            account, null = typed valuations only. Anything else is refused; crypto sources need a quantity, so \
+            they and accounts that track one are changed on the phone)
             categorize marks rows as set by hand, so rules never refile them later. For a merchant that recurs, \
             prefer createRule plus applyRules; keep categorize for one-off rows.
             Categories are referenced by name, records by id from the read tools.
@@ -105,7 +107,8 @@ extension ToolCatalog {
                                                   "description": "Units held today per ISIN."]),
                             "amountEur": .object(["type": ["number", "null"], "description": "EUR amount; null clears it."]),
                             "at": date("Day the anchor or opening refers to (YYYY-MM-DD)."),
-                            "source": .object(["type": ["string", "null"], "description": "Live value source, or null."]),
+                            "source": .object(["type": ["string", "null"], "enum": [.string("funds"), .string("t212"), .null],
+                                               "description": "Live value source, or null for typed valuations."]),
                         ]),
                     ])]),
                 ]),

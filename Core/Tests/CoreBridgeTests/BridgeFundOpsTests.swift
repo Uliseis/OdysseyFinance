@@ -275,8 +275,9 @@ final class BridgeFundOpsTests: XCTestCase {
         let outcome = run([.setLiveSource(accountId: s.funds.id, source: " funds ")], s)
         let shown = try XCTUnwrap(outcome.ops.first)
         XCTAssertEqual(shown.status, .applied, shown.message)
+        XCTAssertEqual(shown.message, "The phone values it from fund prices (EODHD)")
         XCTAssertEqual(shown.changes.first?.before, "typed valuations")
-        XCTAssertEqual(shown.changes.first?.after, "funds")
+        XCTAssertEqual(shown.changes.first?.after, "fund prices (EODHD)")
         XCTAssertEqual(s.funds.liveValueSource, "funds")
         XCTAssertNil(s.funds.assetQuantity)
         XCTAssertEqual(run([.setLiveSource(accountId: s.funds.id, source: "funds")], s).ops.first?.status, .skipped)
@@ -287,10 +288,34 @@ final class BridgeFundOpsTests: XCTestCase {
         // Without a quantity a crypto source values nothing, and dropping one couldn't be undone.
         let crypto = run([.setLiveSource(accountId: s.funds.id, source: "crypto:example")], s)
         XCTAssertEqual(crypto.ops.first?.status, .failed)
+        XCTAssertTrue(crypto.ops.first?.message.contains("needs a quantity") ?? false, "\(crypto.ops)")
         try CoreLogic.Investments.setLiveSource(s.funds, source: "crypto:example", quantity: d("0.5"), in: s.ctx)
         let away = run([.setLiveSource(accountId: s.funds.id, source: "funds")], s)
         XCTAssertEqual(away.ops.first?.status, .failed)
         XCTAssertTrue(away.ops.first?.message.contains("quantity") ?? false, "\(away.ops)")
         XCTAssertEqual(s.funds.assetQuantity, d("0.5"))
+    }
+
+    func test_setLiveSource_takesOnlyTrading212FundPricesOrNone() throws {
+        let s = try store()
+        let t212 = run([.setLiveSource(accountId: s.funds.id, source: "t212")], s)
+        let shown = try XCTUnwrap(t212.ops.first)
+        XCTAssertEqual(shown.status, .applied, shown.message)
+        XCTAssertEqual(shown.message, "The phone values it from Trading 212")
+        XCTAssertEqual(shown.changes.first?.after, "Trading 212")
+        XCTAssertEqual(s.funds.liveValueSource, "t212")
+
+        for source in ["coingecko", "Funds", "eodhd"] {
+            let refused = run([.setLiveSource(accountId: s.funds.id, source: source)], s)
+            XCTAssertEqual(refused.ops.first?.status, .failed, source)
+            XCTAssertEqual(refused.ops.first?.message,
+                           #"Unknown source "\#(source)": use "funds" (fund prices), "t212" (Trading 212) or null (typed valuations only)"#)
+        }
+        XCTAssertEqual(s.funds.liveValueSource, "t212")
+
+        let manual = run([.setLiveSource(accountId: s.funds.id, source: nil)], s)
+        XCTAssertEqual(manual.ops.first?.status, .applied, "\(manual.ops)")
+        XCTAssertEqual(manual.ops.first?.changes.first?.before, "Trading 212")
+        XCTAssertNil(s.funds.liveValueSource)
     }
 }
