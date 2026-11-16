@@ -44,6 +44,12 @@ extension CoreLogic {
 
         public init() {}
 
+        // By ISIN: the prices that can value a position, which needs euros. A held pending
+        // price isn't one.
+        public var eurPrices: [String: Decimal] {
+            funds.compactMapValues { $0.currency == "EUR" ? $0.price : nil }
+        }
+
         // A fund that can't be read is dropped and looked up again; the rest stay. The request
         // count has no fallback: without it the file is unreadable as a whole.
         public init(from decoder: any Decoder) throws {

@@ -720,6 +720,54 @@ final class FundTradesTests: XCTestCase {
         XCTAssertEqual(try saved(ctx, key: switchBuy).switchGroupId, group)
     }
 
+    // MARK: - Held units guess
+
+    func testEveryFundInTheExportIsListedAndOnlySavedOnesAreGuessed() throws {
+        let ctx = try S.makeContext()
+        let acc = try makeInvestmentAccount(ctx)
+        try T.importOrders(ordersCSV: firstExport, movementsCSV: firstCash, heldUnits: [a: 18, b: 5], into: acc, in: ctx)
+
+        let guesses = try T.guessHeldUnits(ordersCSV: csv(
+            "15/04/2030;\(c);30.00 EUR;;Cancelada",
+            "12/04/2030;\(b);20.00 EUR;;En curso",
+            "10/04/2030;\(a);60.00 EUR;6,000;Finalizada",
+            "20/03/2030;\(a);125.00 EUR;12,000;Finalizada",
+            "20/02/2030;\(a);205.00 EUR;20,000;Finalizada",
+            "15/02/2030;\(b);50.00 EUR;5,000;Finalizada",
+            // Identical to a saved order, so it's numbered as a second one and is new.
+            "20/01/2030;\(a);100.00 EUR;10,000;Finalizada",
+            "20/01/2030;\(a);100.00 EUR;10,000;Finalizada"
+        ), for: acc, in: ctx)
+
+        // a: 18 saved, plus 6 and 10 new read as buys. b: its only new order isn't done.
+        XCTAssertEqual(guesses, [
+            T.HeldUnitsGuess(isin: a, units: 34),
+            T.HeldUnitsGuess(isin: b, units: 5),
+            T.HeldUnitsGuess(isin: c, units: nil),
+        ])
+    }
+
+    func testAFundSoldOutWithNothingNewIsGuessedAtZero() throws {
+        let ctx = try S.makeContext()
+        let acc = try makeInvestmentAccount(ctx)
+        let orders = csv("20/02/2030;\(a);110.00 EUR;10,000;Finalizada",
+                         "20/01/2030;\(a);100.00 EUR;10,000;Finalizada")
+        try T.importOrders(ordersCSV: orders, movementsCSV: cash([("21/02/2030", "110"), ("21/01/2030", "-100")]),
+                           heldUnits: [:], into: acc, in: ctx)
+
+        XCTAssertEqual(try T.guessHeldUnits(ordersCSV: orders, for: acc, in: ctx), [T.HeldUnitsGuess(isin: a, units: 0)])
+    }
+
+    func testAGuessFromAFileThatIsntTheOrdersExportThrowsItsParseError() throws {
+        let ctx = try S.makeContext()
+        let acc = try makeInvestmentAccount(ctx)
+
+        XCTAssertThrowsError(try T.guessHeldUnits(ordersCSV: cashHeader, for: acc, in: ctx)) { error in
+            XCTAssertEqual(error as? CoreLogic.MyInvestorOrdersCSV.ParseError,
+                           .unknownHeader(CoreLogic.MyInvestorMovementsCSV.columns))
+        }
+    }
+
     // MARK: - Broker cash
 
     func testBrokerCashAnchorIsPinnedToTheUTCDayAndClearedWithItsAmount() throws {

@@ -194,6 +194,44 @@ extension CoreLogic {
                 positions: Funds.positions(chronological(existing + inserted).map(trade(from:))))
         }
 
+        public struct HeldUnitsGuess: Equatable, Sendable {
+            public let isin: String
+            // nil when the account has no saved trades for the fund.
+            public let units: Decimal?
+
+            public init(isin: String, units: Decimal?) {
+                self.isin = isin
+                self.units = units
+            }
+        }
+
+        // A starting point for the units held today that an import asks for, for every ISIN in
+        // the orders export, sorted. A fund with saved trades holds what they add up to plus the
+        // export's new done orders read as buys; for any other fund nothing says how much of it
+        // was sold, so there's no guess.
+        @MainActor
+        public static func guessHeldUnits(
+            ordersCSV: String, for account: Account, in ctx: ModelContext
+        ) throws -> [HeldUnitsGuess] {
+            let parsed = try MyInvestorOrdersCSV.parse(ordersCSV)
+            let saved = try savedTrades(of: account, in: ctx)
+            let savedKeys = Set(saved.compactMap(\.importKey))
+            let held = Dictionary(uniqueKeysWithValues:
+                Funds.positions(chronological(saved).map(trade(from:))).map { ($0.isin, $0.units) })
+            // The done orders in the order an import keys them; the readings are left unused.
+            var newUnits: [String: Decimal] = [:]
+            for fund in MyInvestorOrdersCSV.infer(orders: parsed.rows, heldUnits: [:]).funds {
+                let asBuys = fund.orders.map {
+                    Funds.Trade(isin: fund.isin, date: $0.date, side: .buy, units: $0.units ?? 0, amountEur: $0.amountEur)
+                }
+                newUnits[fund.isin] = keyed(asBuys).filter { !savedKeys.contains($0.key) }
+                    .reduce(0) { $0 + $1.trade.units }
+            }
+            return Set(parsed.rows.map(\.isin)).sorted().map { isin in
+                HeldUnitsGuess(isin: isin, units: held[isin].map { $0 + (newUnits[isin] ?? 0) })
+            }
+        }
+
         @MainActor
         public static func trades(for account: Account, in ctx: ModelContext) throws -> [Funds.Trade] {
             chronological(try savedTrades(of: account, in: ctx)).map(trade(from:))
