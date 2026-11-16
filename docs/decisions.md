@@ -65,3 +65,7 @@ Format: **decision**, why, and when it's worth revisiting.
 **Why.** The inbox is a folder any program on the Mac, and any device on the iCloud account, can write to. Review plus Face ID guards a batch; auto-apply skips that, so it needs proof of origin. Signing doesn't stop a program on the paired Mac that runs the server binary itself; the switches stay off by default and every auto-applied batch can be undone.
 **Revisit when.** The server runs somewhere other than the user's own Mac, or a batch type outside the safe set is considered for auto-apply.
 
+### D15. A Mac helper app claims the bridge container (2026-11-16)
+**Decision.** Extends D13. `Tools/OdysseyBridgeHelper` is a minimal signed Mac app whose entitlements name the app's iCloud container. It stays installed in `~/Applications`, and opening it once registers the container on the Mac. It never touches CloudKit's database, and the MCP server still reads the folder by path.
+**Why.** macOS syncs an app's private iCloud Drive container only while an app that names it is installed on the Mac. Without one, the iCloud daemon marks the container "app not installed", stops syncing it and drops the local copies. The bridge worked at first only because the Mac had created the folder itself. iPhone builds registered on the Mac don't count.
+**Revisit when.** The MCP server ships as an app bundle that can claim the container itself, or a Mac app becomes a CloudKit client (D13).

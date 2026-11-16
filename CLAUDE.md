@@ -13,6 +13,7 @@ Native iOS personal finance app (SwiftUI, SwiftData, CloudKit) for a single user
 - One suite: `swift test --package-path Core --filter CoreLogicTests.TransfersTests`
 - Importer tests: `swift test --package-path Tools/ImportFromPostgres`
 - Claude MCP server tests: `swift test --package-path Tools/OdysseyMCP`; build with `swift build -c release --package-path Tools/OdysseyMCP` and register with `claude mcp add odyssey -- "$PWD/Tools/OdysseyMCP/.build/release/OdysseyMCP"`
+- Mac bridge helper, which keeps the bridge folder syncing on the Mac (D15): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyBridgeHelper -configuration Release -derivedDataPath build/mac -allowProvisioningUpdates build`, then copy `build/mac/Build/Products/Release/OdysseyBridgeHelper.app` to `~/Applications` and open it once (needs Xcode signed in to the team)
 - iOS build (`swift test` doesn't compile `App/` or iOS-only `CoreSync` code, so run this too): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyFinance -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO`
 - Device build: same command with `-destination 'generic/platform=iOS' -allowProvisioningUpdates`
 - Repo guards: `scripts/check-repo.sh [base-ref]`
@@ -23,7 +24,7 @@ CI (`.github/workflows/ci.yml`) runs the guards, both test suites and the iOS bu
 ## Layout
 - `App/`: the SwiftUI target only. `Features/<Feature>/` views, `Intents/` App Intents, `Support/` theme, gates and runners. Besides `App.swift`, top-level `App/*.swift` files are `#if DEBUG` one-shot tools.
 - `Core/Sources/`: the Swift package (iOS and macOS). `CoreModel` (`@Model` types, no logic) → `CoreIntegrations` (HTTP clients, JWT signing, Keychain) → `CoreLogic` (every business rule) → `CoreSync` (`CKSyncEngine`) → `CoreBridge` (Claude bridge snapshot, replica and queries). Tests in `Core/Tests/<Target>Tests/`.
-- `Tools/`: the finished one-shot Postgres → SwiftData migration, and `OdysseyMCP`, Claude's MCP server (D13).
+- `Tools/`: the finished one-shot Postgres → SwiftData migration, `OdysseyMCP`, Claude's MCP server (D13), and `OdysseyBridgeHelper`, the Mac app that keeps its iCloud folder syncing (D15).
 - `Spec/`: frozen copy of the original Next.js app, the porting reference.
 - `Vercel/`: static AASA and config for the bank-redirect host.
 - `design/app-icon/`: icon generator and SVG sources.
