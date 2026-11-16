@@ -54,32 +54,31 @@ extension CoreLogic {
             ))
         }
 
-        @MainActor private static var running = false
-        @MainActor private static var waiting: [CheckedContinuation<Outcome, Never>] = []
+        @MainActor private static var current: Task<Outcome, Never>?
 
         // A call made while a run is going (the foreground sync and a pull to refresh) gets that
         // run's outcome: a second run would load the same fund price cache, fetch the same
-        // prices again and lose count of the requests.
+        // prices again and lose count of the requests. The run is a task of its own, so a caller
+        // that goes away (a pull to refresh whose screen closes) doesn't cut it short for the rest.
         @MainActor
         @discardableResult
         public static func run(
             in ctx: ModelContext,
             keychain: any MarketKeys = MarketKeychain(),
             crypto: any CryptoPriceSource = CryptoPriceClient(),
-            fundPrices: (_ apiKey: String) -> any FundPriceSource = { EODHDClient(apiKey: $0) },
+            fundPrices: @escaping (_ apiKey: String) -> any FundPriceSource = { EODHDClient(apiKey: $0) },
             fundPriceCache: any FundPriceCacheStore = FundPriceCacheFile(),
             now: Date = .now
         ) async -> Outcome {
-            if running { return await withCheckedContinuation { waiting.append($0) } }
-            running = true
-            let outcome = await refreshAll(
-                in: ctx, keychain: keychain, crypto: crypto, fundPrices: fundPrices,
-                fundPriceCache: fundPriceCache, now: now)
-            running = false
-            let waiters = waiting
-            waiting = []
-            for waiter in waiters { waiter.resume(returning: outcome) }
-            return outcome
+            if let current { return await current.value }
+            let task = Task {
+                defer { current = nil }
+                return await refreshAll(
+                    in: ctx, keychain: keychain, crypto: crypto, fundPrices: fundPrices,
+                    fundPriceCache: fundPriceCache, now: now)
+            }
+            current = task
+            return await task.value
         }
 
         @MainActor
@@ -302,7 +301,6 @@ extension CoreLogic {
                 return true
             }
             for isin in isins {
-                if Task.isCancelled { break }
                 if result.cache.funds[isin] == nil {
                     if result.cache.failedLookups[isin] == today {
                         result.notRefreshed[isin] = notListed
@@ -329,7 +327,6 @@ extension CoreLogic {
                 guard var entry = result.cache.funds[isin], entry.currency == "EUR", entry.fetchedDay != today else {
                     continue
                 }
-                if Task.isCancelled { break }
                 guard result.cache.requestCount < fundRequestsPerDay else {
                     result.notRefreshed[isin] = capReached
                     continue
