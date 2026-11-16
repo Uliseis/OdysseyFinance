@@ -65,6 +65,8 @@ extension CoreLogic {
 public protocol FundPriceCacheStore {
     // nil when there is a cache that can't be read, as opposed to none at all.
     func load() -> CoreLogic.FundPriceCache?
+    // When the cache was last written; nil when that's unknown.
+    func modificationDate() -> Date?
     func save(_ cache: CoreLogic.FundPriceCache) throws
 }
 
@@ -85,6 +87,11 @@ public struct FundPriceCacheFile: FundPriceCacheStore {
             return nil
         }
         return try? JSONDecoder().decode(CoreLogic.FundPriceCache.self, from: data)
+    }
+
+    // From the file system, not URL resource values: a URL caches those.
+    public func modificationDate() -> Date? {
+        try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false))[.modificationDate] as? Date
     }
 
     public func save(_ cache: CoreLogic.FundPriceCache) throws {

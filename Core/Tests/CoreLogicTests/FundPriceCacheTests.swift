@@ -44,6 +44,16 @@ final class FundPriceCacheTests: XCTestCase {
         XCTAssertEqual(FundPriceCacheFile(url: url).load(), expected)
     }
 
+    func testTheModificationDateIsTheFilesAndNilWithoutOne() throws {
+        let url = dir.appending(path: "fund-prices.json")
+        XCTAssertNil(FundPriceCacheFile(url: url).modificationDate())
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: url)
+        let written = Date(timeIntervalSince1970: 21_990 * 86_400 + 3_600)
+        try FileManager.default.setAttributes([.modificationDate: written], ofItemAtPath: url.path(percentEncoded: false))
+        XCTAssertEqual(FundPriceCacheFile(url: url).modificationDate(), written)
+    }
+
     func testAFileWithoutARequestCountIsUnreadable() throws {
         let url = dir.appending(path: "fund-prices.json")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

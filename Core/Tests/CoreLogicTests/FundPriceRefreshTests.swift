@@ -189,22 +189,62 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(source.latests, [a, a, b], "the next UTC day fetches both again")
     }
 
-    func testAnUnreadableCacheMakesNoRequestsAndIsLeftAsItIs() async throws {
-        let ctx = try S.makeContext()
-        let acc = try makeAccount(ctx)
+    // Without its request count the cache can't be read.
+    private let unreadable = Data(#"{"funds": {"ZZ0000000A00": {"name": "Example Fund A", "currency": "EUR"}}}"#.utf8)
+
+    private func unreadableCacheFile(modified: Date) throws -> FundPriceCacheFile {
         let dir = FileManager.default.temporaryDirectory.appending(path: "fund-price-refresh-\(UUID())")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appending(path: "fund-prices.json")
-        let unreadable = Data(#"{"funds": {"\#(a)": {"name": "Example Fund A", "currency": "EUR"}}}"#.utf8)
         try unreadable.write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path(percentEncoded: false))
+        return FundPriceCacheFile(url: url)
+    }
 
-        let outcome = await run(ctx, store: FundPriceCacheFile(url: url))
+    func testAnUnreadableCacheWrittenTodayMakesNoRequestsAndIsLeftAsItIs() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        let file = try unreadableCacheFile(modified: day(13).addingTimeInterval(3600))
+
+        let outcome = await run(ctx, store: file)
 
         XCTAssertEqual(source.lookups + source.latests, [], "it can't say how many requests today made")
-        XCTAssertEqual(try Data(contentsOf: url), unreadable, "an empty cache would drop its prices and held jumps")
+        XCTAssertEqual(try Data(contentsOf: file.url), unreadable, "an empty cache would drop its prices and held jumps")
         XCTAssertTrue(outcome.updated.isEmpty)
         XCTAssertEqual(try valuations(acc, ctx).count, 0)
+        XCTAssertEqual(outcome.notices, ["The fund price cache couldn't be read; no fund prices are fetched today."])
+    }
+
+    func testAnUnreadableCacheWrittenBeforeTodayIsReplacedByTheRequestsMadeNow() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        let file = try unreadableCacheFile(modified: day(12).addingTimeInterval(20 * 3600))
+
+        let outcome = await run(ctx, store: file)
+
+        XCTAssertEqual(source.lookups, [a, b], "counts are saved before each request, so it counted none today")
+        XCTAssertEqual(source.latests, [a, b])
+        let replaced = try XCTUnwrap(file.load(), "replaced by a cache that can be read")
+        XCTAssertEqual(replaced.requestDay, day(13))
+        XCTAssertEqual(replaced.requestCount, 4)
+        XCTAssertEqual(replaced.funds[a]?.price, d("7.4321"))
+        XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
+        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("108.0082"))
+        XCTAssertEqual(outcome.notices,
+                       ["The fund price cache couldn't be read; it starts again from the prices fetched now."])
+    }
+
+    func testAnUnreadableCacheOfUnknownAgeMakesNoRequests() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        cache.unreadable = true
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(source.lookups + source.latests, [])
+        XCTAssertEqual(cache.saves.count, 0)
+        XCTAssertEqual(outcome.notices, ["The fund price cache couldn't be read; no fund prices are fetched today."])
     }
 
     func testTheDailyLimitAnswerStopsRequestsForTheDay() async throws {
@@ -631,12 +671,16 @@ private final class FakeFundSource: FundPriceSource {
 
 private final class MemoryFundPriceCache: FundPriceCacheStore {
     var cache = CoreLogic.FundPriceCache()
+    var unreadable = false
+    var modified: Date?
     var saveError: (any Error)?
     private(set) var saves: [CoreLogic.FundPriceCache] = []
-    func load() -> CoreLogic.FundPriceCache? { cache }
+    func load() -> CoreLogic.FundPriceCache? { unreadable ? nil : cache }
+    func modificationDate() -> Date? { modified }
     func save(_ cache: CoreLogic.FundPriceCache) throws {
         if let saveError { throw saveError }
         self.cache = cache
+        unreadable = false
         saves.append(cache)
     }
 }
