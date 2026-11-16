@@ -56,6 +56,8 @@ struct FundPricesSettingsView: View {
             saveFailed = false
         } catch {
             saveFailed = true
+            // The store can fail after the old key was already deleted.
+            stored = keychain.hasEODHD
         }
     }
 }
