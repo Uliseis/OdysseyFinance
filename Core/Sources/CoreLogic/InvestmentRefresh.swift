@@ -210,6 +210,9 @@ extension CoreLogic {
                 store: store, source: makeSource(apiKey), today: today)
             let cache = refresh.cache
             if refresh.keyRejected { outcome.failures.append("EODHD rejected the key; check it in Settings.") }
+            if let then = refresh.unreadableCache {
+                outcome.notices.append("The fund price cache couldn't be read; \(then).")
+            }
             if let why = refresh.saveFailure { outcome.notices.append("Fund prices weren't cached: \(why)") }
 
             var values: [UUID: (market: Decimal, cash: Decimal)] = [:]
@@ -258,6 +261,8 @@ extension CoreLogic {
             var notRefreshed: [String: String] = [:]
             var keyRejected = false
             var saveFailure: String?
+            // What a cache that couldn't be read means for this run.
+            var unreadableCache: String?
         }
 
         // A name and currency once per fund, a price at most once per fund per UTC day, and no
@@ -273,11 +278,18 @@ extension CoreLogic {
                 do { try store.save(result.cache) } catch { result.saveFailure = "\(error)" }
             }
             if loaded == nil {
-                // An unreadable cache can't say how many requests today already made: assume all
-                // of them. Nothing is sent, so the file isn't written over and keeps its prices and
-                // held jumps for when it can be read again.
-                result.cache.requestDay = today
-                result.cache.requestCount = fundRequestsPerDay
+                // Counts are saved before each request, so a cache last written before today
+                // counted none of today's: start again, and the first request writes over it.
+                // Written today, or at an unknown time, it can't say how many today made: assume
+                // all of them and send nothing, so a cache that can be read again keeps its prices
+                // and held jumps.
+                if let modified = store.modificationDate(), Funds.dayStart(modified) < today {
+                    result.unreadableCache = "it starts again from the prices fetched now"
+                } else {
+                    result.cache.requestDay = today
+                    result.cache.requestCount = fundRequestsPerDay
+                    result.unreadableCache = "no fund prices are fetched today"
+                }
             }
             if result.cache.requestDay != today {
                 result.cache.requestDay = today
