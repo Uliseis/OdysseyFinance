@@ -5,18 +5,19 @@ import CoreLogic
 // names by ISIN from the price cache; a fund without one is named by its ISIN.
 enum FundImportText {
     static func summary(_ s: CoreLogic.FundTrades.ImportSummary) -> [String] {
-        var lines = ["\(pluralized(s.inserted, "new order")) saved."]
-        if s.alreadyPresent > 0 { lines.append("\(pluralized(s.alreadyPresent, "order")) already saved.") }
-        lines.append("\(pluralized(s.matchedToCash, "order")) matched to cash movements.")
-        if s.switchPairs > 0 {
-            lines.append("\(s.switchPairs) \(s.switchPairs == 1 ? "switch" : "switches") between funds, \(s.switchPairsAdded) new.")
-        }
-        if s.amountsCorrected > 0 {
-            let by = Money.format(s.amountsCorrectedEur, currency: "EUR")
-            lines.append("\(pluralized(s.amountsCorrected, "saved amount")) corrected to the cash really moved (\(s.amountsCorrectedEur > 0 ? "+" : "")\(by)).")
-        }
+        let by = Money.format(s.amountsCorrectedEur, currency: "EUR")
+        var lines = [
+            "\(pluralized(s.inserted, "new order")) saved.",
+            "\(pluralized(s.alreadyPresent, "order")) already saved.",
+            "\(pluralized(s.matchedToCash, "order")) matched to cash movements.",
+            "\(s.switchPairs) \(s.switchPairs == 1 ? "switch" : "switches") between funds"
+                + (s.switchPairs > 0 ? ", \(s.switchPairsAdded) new." : "."),
+            "\(pluralized(s.amountsCorrected, "saved amount")) corrected to the cash really moved"
+                + (s.amountsCorrected > 0 ? " (\(s.amountsCorrectedEur > 0 ? "+" : "")\(by))." : "."),
+        ]
         if s.skippedInProgress > 0 {
-            lines.append("\(pluralized(s.skippedInProgress, "order")) still in progress, not saved: a later export brings them back finished.")
+            let them = s.skippedInProgress == 1 ? "it" : "them"
+            lines.append("\(pluralized(s.skippedInProgress, "order")) still in progress, not saved: a later export brings \(them) back finished.")
         }
         let dropped = s.skippedCancelled + s.skippedRejected
         if dropped > 0 { lines.append("\(pluralized(dropped, "cancelled or rejected order")) skipped.") }
@@ -24,7 +25,7 @@ enum FundImportText {
     }
 
     static func refusal(_ error: Error, names: [String: String]) -> String {
-        func funds(_ isins: [String]) -> String { isins.map { names[$0] ?? $0 }.joined(separator: ", ") }
+        func funds(_ isins: [String]) -> String { isins.map { names[$0] ?? $0 }.formatted(.list(type: .and)) }
         func orders(_ keys: [String]) -> String { keys.map { order($0, names: names) }.joined(separator: "\n") }
         switch error {
         case let e as CoreLogic.FundTrades.ImportError:
