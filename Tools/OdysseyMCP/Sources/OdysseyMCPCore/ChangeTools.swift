@@ -233,6 +233,8 @@ extension ToolCatalog {
     // Exports travel inside the batch; Claude names the file and the server reads it.
     static let fileFields = [("csvPath", "csv", "statement"), ("ordersCsvPath", "ordersCsv", "orders export"),
                              ("movementsCsvPath", "movementsCsv", "cash-movements export")]
+    // Far above any real export: a bigger file is the wrong one, and would ride in the batch.
+    static let maxFileBytes = 2 * 1024 * 1024
 
     static func inlineFiles(_ args: Arguments) throws -> Arguments {
         guard case .array(let ops)? = args.raw["ops"] else { return args }
@@ -241,16 +243,27 @@ extension ToolCatalog {
             guard case .object(var fields) = op else { return op }
             for (pathKey, textKey, what) in fileFields {
                 guard case .string(let path)? = fields[pathKey] else { continue }
-                let url = URL(filePath: (path as NSString).expandingTildeInPath)
-                guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                    throw ArgumentError("Can't read the \(what) at \(path)")
-                }
-                fields[textKey] = .string(text)
+                fields[textKey] = .string(try readExport(path, what))
                 fields[pathKey] = nil
             }
             return .object(fields)
         })
         return try Arguments(raw)
+    }
+
+    // Reads at most one byte past the cap, whatever size the file claims.
+    private static func readExport(_ path: String, _ what: String) throws -> String {
+        let unreadable = ArgumentError("Can't read the \(what) at \(path)")
+        guard let handle = try? FileHandle(forReadingFrom: URL(filePath: (path as NSString).expandingTildeInPath)) else {
+            throw unreadable
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: maxFileBytes + 1) ?? Data() else { throw unreadable }
+        guard data.count <= maxFileBytes else {
+            throw ArgumentError("The \(what) at \(path) is over 2 MB: check it's the right file, or export a shorter period")
+        }
+        guard let text = String(data: data, encoding: .utf8) else { throw unreadable }
+        return text
     }
 
     private func publishKey(_ key: P256.Signing.PrivateKey) throws {
