@@ -78,4 +78,12 @@ final class FundPriceCacheTests: XCTestCase {
         XCTAssertEqual(loaded, cache)
         XCTAssertEqual(loaded.funds["ZZ0000000A00"]?.price?.description, "5.1234")
     }
+
+    func testEuroPricesLeaveOutOtherCurrenciesAndFundsWithoutAPrice() {
+        var cache = CoreLogic.FundPriceCache()
+        cache.funds["ZZ0000000A00"] = .init(name: "Euro Fund", currency: "EUR", price: 5, pendingPrice: 9)
+        cache.funds["ZZ0000000B09"] = .init(name: "Dollar Fund", currency: "USD", price: 7)
+        cache.funds["ZZ0000000C08"] = .init(name: "Fund Not Priced Yet", currency: "EUR")
+        XCTAssertEqual(cache.eurPrices, ["ZZ0000000A00": 5])
+    }
 }
