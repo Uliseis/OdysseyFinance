@@ -18,6 +18,8 @@ struct RecordValuationView: View {
     @State private var basisText = ""
     @State private var basisAt = Date.now
     @State private var source = LiveSource.manual
+    // A live source this sheet can't show (funds): kept on save unless another one is picked.
+    @State private var keptSource: String?
     @State private var coinText = "bitcoin"
     @State private var quantityText = ""
     @State private var saveError: String?
@@ -88,7 +90,7 @@ struct RecordValuationView: View {
     private var valueSection: some View {
         Section {
             LabeledContent("Market value") {
-                TextField(source == .manual ? "0" : "Fetched automatically", text: $marketText)
+                TextField(source == .manual && keptSource == nil ? "0" : "Fetched automatically", text: $marketText)
                     .multilineTextAlignment(.trailing)
                     .font(.readout(.title3))
                     .keyboardType(.decimalPad)
@@ -212,6 +214,8 @@ struct RecordValuationView: View {
             }
         } footer: {
             switch source {
+            case .manual where keptSource != nil:
+                Text("Valued automatically each time you open the app. Picking another source here replaces it.")
             case .manual:
                 Text("You'll enter the value yourself whenever you want to update it.")
             case .trading212:
@@ -268,6 +272,8 @@ struct RecordValuationView: View {
             } else if let coin = CoreLogic.InvestmentRefresh.coinId(from: live) {
                 source = .crypto
                 coinText = coin
+            } else {
+                keptSource = live
             }
         }
         if let qty = account.assetQuantity { quantityText = decimalField(qty) }
@@ -305,14 +311,16 @@ struct RecordValuationView: View {
         do {
             try CoreLogic.Investments.setCostBasisOpening(
                 account, amountEur: basis, at: basisAt, in: ctx)
-            let liveSource: String? = switch source {
-            case .manual: nil
-            case .trading212: CoreLogic.InvestmentRefresh.trading212Source
-            case .crypto: CoreLogic.InvestmentRefresh.cryptoPrefix
-                + coinText.trimmingCharacters(in: .whitespaces).lowercased()
+            if source != .manual || keptSource == nil {
+                let liveSource: String? = switch source {
+                case .manual: nil
+                case .trading212: CoreLogic.InvestmentRefresh.trading212Source
+                case .crypto: CoreLogic.InvestmentRefresh.cryptoPrefix
+                    + coinText.trimmingCharacters(in: .whitespaces).lowercased()
+                }
+                try CoreLogic.Investments.setLiveSource(
+                    account, source: liveSource, quantity: quantity, in: ctx)
             }
-            try CoreLogic.Investments.setLiveSource(
-                account, source: liveSource, quantity: quantity, in: ctx)
             if let market {
                 try CoreLogic.Investments.recordValuation(
                     account: account, marketValueEur: market, cashValueEur: cash,
