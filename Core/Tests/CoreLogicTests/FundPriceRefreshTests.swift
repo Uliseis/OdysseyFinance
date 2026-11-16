@@ -208,6 +208,41 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertTrue(outcome.failures[0].contains(b), "B was never looked up, so its ISIN names it")
     }
 
+    func testACancelledRunMakesNoRequests() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+
+        let task = Task { await run(ctx) }
+        task.cancel()
+        _ = await task.value
+
+        XCTAssertEqual(source.lookups + source.latests, [])
+        XCTAssertEqual(cache.cache.requestCount, 0)
+    }
+
+    func testARequestEndingInCancellationIsNotCountedAndEndsTheRequests() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        source.latestErrors[a] = URLError(.cancelled)
+
+        _ = await run(ctx)
+
+        XCTAssertEqual(source.lookups, [a])
+        XCTAssertEqual(source.latests, [a])
+        XCTAssertEqual(cache.cache.requestCount, 1, "the lookup counts, the cancelled request doesn't")
+
+        let ctx2 = try S.makeContext()
+        _ = try makeAccount(ctx2)
+        source = FakeFundSource()
+        source.lookupErrors[a] = CancellationError()
+        cache = MemoryFundPriceCache()
+
+        _ = await run(ctx2)
+
+        XCTAssertEqual(source.lookups, [a])
+        XCTAssertEqual(cache.cache.requestCount, 0)
+    }
+
     func testARejectedKeyStopsTheRunsRequestsAndIsReportedOnce() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)

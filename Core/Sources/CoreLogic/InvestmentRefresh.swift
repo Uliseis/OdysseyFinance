@@ -278,6 +278,7 @@ extension CoreLogic {
                 return true
             }
             for isin in isins {
+                if Task.isCancelled { break }
                 if result.cache.funds[isin] == nil {
                     if result.cache.failedLookups[isin] == today {
                         result.notRefreshed[isin] = notListed
@@ -293,6 +294,10 @@ extension CoreLogic {
                         let info = try await source.lookup(isin: isin)
                         result.cache.funds[isin] = FundPriceCache.Entry(name: info.name, currency: info.currency)
                     } catch {
+                        if isCancellation(error) {
+                            result.cache.requestCount -= 1
+                            break
+                        }
                         if error as? FundPriceError == .notFound { result.cache.failedLookups[isin] = today }
                         if keepFetching(after: error, isin: isin, notFound: notListed) { continue } else { break }
                     }
@@ -300,6 +305,7 @@ extension CoreLogic {
                 guard var entry = result.cache.funds[isin], entry.currency == "EUR", entry.fetchedDay != today else {
                     continue
                 }
+                if Task.isCancelled { break }
                 guard result.cache.requestCount < fundRequestsPerDay else {
                     result.notRefreshed[isin] = capReached
                     continue
@@ -312,6 +318,10 @@ extension CoreLogic {
                     accept(quote, into: &entry)
                     result.cache.funds[isin] = entry
                 } catch {
+                    if isCancellation(error) {
+                        result.cache.requestCount -= 1
+                        break
+                    }
                     if error as? FundPriceError == .notFound {
                         entry.fetchedDay = today
                         result.cache.funds[isin] = entry
@@ -353,6 +363,11 @@ extension CoreLogic {
 
         private static func isJump(_ price: Decimal, from reference: Decimal) -> Bool {
             reference > 0 && abs(price - reference) / reference > fundJumpLimit
+        }
+
+        // A request cut short by a cancelled task isn't counted against the day's cap.
+        private static func isCancellation(_ error: any Error) -> Bool {
+            error is CancellationError || (error as? URLError)?.code == .cancelled
         }
 
         // Monday to Friday, UTC, after `day` up to and including `end`'s day.
