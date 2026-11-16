@@ -148,6 +148,24 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(source.latests, [a, a, b], "the next UTC day fetches both again")
     }
 
+    func testAnUnreadableCacheMakesNoRequestsUntilTheNextDay() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cache.unreadable = true
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(source.lookups + source.latests, [])
+        XCTAssertFalse(cache.unreadable, "the file is rewritten")
+        XCTAssertEqual(cache.cache.requestDay, day(13))
+        XCTAssertEqual(cache.cache.requestCount, R.fundRequestsPerDay, "and keeps today's requests used up")
+        XCTAssertTrue(outcome.updated.isEmpty)
+        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+
+        _ = await run(ctx, at: day(14).addingTimeInterval(3600))
+        XCTAssertEqual(source.lookups, [a, b], "the next UTC day fetches again")
+    }
+
     func testTheDailyLimitAnswerStopsRequestsForTheDay() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
@@ -336,8 +354,12 @@ private final class FakeFundSource: FundPriceSource {
 
 private final class MemoryFundPriceCache: FundPriceCacheStore {
     var cache = CoreLogic.FundPriceCache()
-    func load() -> CoreLogic.FundPriceCache { cache }
-    func save(_ cache: CoreLogic.FundPriceCache) throws { self.cache = cache }
+    var unreadable = false
+    func load() -> CoreLogic.FundPriceCache? { unreadable ? nil : cache }
+    func save(_ cache: CoreLogic.FundPriceCache) throws {
+        self.cache = cache
+        unreadable = false
+    }
 }
 
 private struct FakeKeys: MarketKeys {
