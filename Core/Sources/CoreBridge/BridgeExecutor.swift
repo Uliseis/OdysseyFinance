@@ -443,7 +443,8 @@ public enum BridgeExecutor {
             let account = try investmentAccount(accountId, in: ctx)
             try requireDay(amount, at)
             let was = (amount: account.brokerCashAnchorEur, at: account.brokerCashAnchorAt)
-            let day = amount == nil ? nil : at.map(utcDay)
+            // Pinned to the UTC day as CoreLogic stores it, so a replay reads as no change.
+            let day = amount == nil ? nil : at.map(FX.startOfUTCDay)
             guard was.amount != amount || was.at != day else {
                 step.message = "Already \(anchorText(amount, day, "at the end of") ?? "without an anchor")"
                 return
@@ -466,7 +467,7 @@ public enum BridgeExecutor {
             let account = try investmentAccount(accountId, in: ctx)
             try requireDay(amount, at)
             let was = (amount: account.costBasisOpeningEur, at: account.costBasisOpeningAt)
-            let day = amount == nil ? nil : at.map(utcDay)
+            let day = amount == nil ? nil : at.map(FX.startOfUTCDay)
             guard was.amount != amount || was.at != day else {
                 step.message = "Already \(anchorText(amount, day, "before") ?? "without an opening")"
                 return
@@ -602,13 +603,6 @@ public enum BridgeExecutor {
     // an anchor tracks nothing.
     private static func requireDay(_ amount: Decimal?, _ at: Date?) throws {
         if amount != nil && at == nil { throw BridgeExecutorError.invalid("at is required when amountEur is set") }
-    }
-
-    // CoreLogic pins anchors to the UTC day; comparing the same way tells a replay from a change.
-    private static func utcDay(_ date: Date) -> Date {
-        var cal = Calendar(identifier: .iso8601)
-        cal.timeZone = TimeZone(identifier: "UTC")!
-        return cal.startOfDay(for: date)
     }
 
     private static func fundImportReason(_ error: Error, account: String) -> String {
