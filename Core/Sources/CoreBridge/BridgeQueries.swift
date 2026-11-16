@@ -192,6 +192,52 @@ public enum BridgeQueries {
         }
     }
 
+    // An investment account's funds, rebuilt from its imported orders (D16).
+    public struct FundPositions: Codable, Sendable {
+        public var accountId: UUID
+        public var account: String
+        public var liveValueSource: String?
+        public var trades: Int
+        public var funds: [FundLine]
+        public var switches: [SwitchLine]
+        // nil until the account has a broker cash anchor.
+        public var cash: BrokerCash?
+    }
+
+    public struct FundLine: Codable, Sendable {
+        public var isin: String
+        public var held: Bool
+        public var units: Decimal
+        // First-in-first-out cost of the units still held.
+        public var costEur: Decimal
+        public var averagePriceEur: Decimal?
+        public var realisedGainEur: Decimal
+    }
+
+    // The sell and buy legs of one switch; a leg is nil when its partner is gone.
+    public struct SwitchLine: Codable, Sendable {
+        public var groupId: UUID
+        public var sell: FundTradeLine?
+        public var buy: FundTradeLine?
+    }
+
+    public struct FundTradeLine: Codable, Sendable {
+        public var id: UUID
+        public var isin: String
+        public var date: Date
+        public var units: Decimal
+        public var amountEur: Decimal
+    }
+
+    public struct BrokerCash: Codable, Sendable {
+        public var anchorEur: Decimal
+        public var anchorAt: Date
+        public var currentEur: Decimal
+        // Below zero means a sale or a transfer in is missing.
+        public var lowestEur: Decimal
+        public var lowestOn: Date
+    }
+
     public static let detectWindowDays = 3
 }
 
@@ -385,6 +431,36 @@ extension BridgeReplica {
         return ids.compactMap(findTransaction).map { line($0, details) }
     }
 
+    public func fundPositions(accountId: UUID) throws -> BridgeQueries.FundPositions {
+        guard let account = try ctx.fetch(FetchDescriptor<Account>(predicate: #Predicate { $0.id == accountId })).first else {
+            throw BridgeError.notFound("account \(accountId)")
+        }
+        let trades = try ctx.fetch(FetchDescriptor<FundTrade>(predicate: #Predicate { $0.account?.id == accountId }))
+        func leg(_ t: FundTrade?) -> BridgeQueries.FundTradeLine? {
+            t.map { .init(id: $0.id, isin: $0.isin, date: $0.tradeDate, units: $0.units, amountEur: $0.amountEur) }
+        }
+        func day(_ s: BridgeQueries.SwitchLine) -> (Date, String) { ((s.sell ?? s.buy)?.date ?? .distantPast, s.groupId.uuidString) }
+        let switches = Dictionary(trades.compactMap { t in t.switchGroupId.map { ($0, [t]) } }, uniquingKeysWith: +)
+            .map { id, legs in
+                BridgeQueries.SwitchLine(groupId: id, sell: leg(legs.first { $0.side == .sell }), buy: leg(legs.first { $0.side == .buy }))
+            }
+            .sorted { day($0) < day($1) }
+        var cash: BridgeQueries.BrokerCash?
+        if let ledger = try CoreLogic.FundTrades.cashLedger(for: account, in: ctx),
+           let anchor = account.brokerCashAnchorEur, let anchorAt = account.brokerCashAnchorAt {
+            cash = .init(anchorEur: anchor, anchorAt: anchorAt, currentEur: toCents(ledger.currentEur),
+                         lowestEur: toCents(ledger.lowest.cashEur), lowestOn: ledger.lowest.date)
+        }
+        return .init(
+            accountId: accountId, account: account.displayName, liveValueSource: account.liveValueSource, trades: trades.count,
+            funds: CoreLogic.Funds.positions(try CoreLogic.FundTrades.trades(for: account, in: ctx)).map { p in
+                // A unit price needs more than cents.
+                .init(isin: p.isin, held: p.units > 0, units: p.units, costEur: toCents(p.costEur),
+                      averagePriceEur: p.averagePriceEur.map { rounded($0, places: 4) }, realisedGainEur: toCents(p.realisedGainEur))
+            },
+            switches: switches, cash: cash)
+    }
+
     public func syncStatus(now: Date) throws -> BridgeQueries.SyncStatus {
         var runs = FetchDescriptor<SyncRun>(sortBy: [SortDescriptor(\.startedAt, order: .reverse)])
         runs.fetchLimit = 20
@@ -458,9 +534,11 @@ public enum BridgeError: Error, CustomStringConvertible {
 
 
 // Valuations and FX conversions carry more than two decimals; answers are in cents.
-func toCents(_ value: Decimal) -> Decimal {
+func toCents(_ value: Decimal) -> Decimal { rounded(value, places: 2) }
+
+func rounded(_ value: Decimal, places: Int) -> Decimal {
     var input = value
-    var rounded = Decimal()
-    NSDecimalRound(&rounded, &input, 2, .plain)
-    return rounded
+    var output = Decimal()
+    NSDecimalRound(&output, &input, places, .plain)
+    return output
 }
