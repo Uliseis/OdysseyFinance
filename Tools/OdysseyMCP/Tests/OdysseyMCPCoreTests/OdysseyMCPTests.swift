@@ -319,12 +319,14 @@ final class OdysseyMCPTests: XCTestCase {
         XCTAssertEqual(ops[2]["message"] as? String, "The phone values it from fund prices (EODHD)")
         XCTAssertEqual(out["undoable"] as? Bool, true)
 
-        let unknown = try json(await catalog().call("propose_changes", [
-            "summary": "x", "ops": [["op": "setLiveSource", "accountId": account, "source": "coingecko"]]]))
-        let refused = try XCTUnwrap((unknown["ops"] as? [[String: Any]])?.first)
-        XCTAssertEqual(refused["status"] as? String, "failed")
-        XCTAssertTrue((refused["message"] as? String)?.contains(#""funds" (fund prices), "t212" (Trading 212) or null"#) ?? false,
-                      "\(refused)")
+        let refusals = try json(await catalog().call("propose_changes", [
+            "summary": "x", "ops": [["op": "setLiveSource", "accountId": account, "source": "coingecko"],
+                                    ["op": "setCostBasisOpening", "accountId": account, "amountEur": 1000]]]))
+        let refused = try XCTUnwrap(refusals["ops"] as? [[String: Any]])
+        XCTAssertEqual(refused.compactMap { $0["status"] as? String }, ["failed", "failed"])
+        XCTAssertTrue((refused[0]["message"] as? String)?.contains(#""funds" (fund prices), "t212" (Trading 212) or null"#) ?? false,
+                      "\(refused[0])")
+        XCTAssertEqual(refused[1]["message"] as? String, "at is required when amountEur is set")
     }
 
     func test_whatThePhoneWillDo_followsItsSettingsAndPairing() async throws {

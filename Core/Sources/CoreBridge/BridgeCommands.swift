@@ -65,7 +65,7 @@ public enum BridgeOp: Sendable, Equatable {
     case archiveAccount(accountId: UUID, archived: Bool)
     // Units held today per ISIN, as the broker shows them: the export doesn't say which orders sold.
     case importFundOrders(accountId: UUID, ordersCsv: String, movementsCsv: String, heldUnits: [String: Decimal])
-    // A nil amount clears the anchor or opening.
+    // A nil amount clears the anchor or opening; an amount needs its day.
     case setBrokerCashAnchor(accountId: UUID, amountEur: Decimal?, at: Date?)
     case setCostBasisOpening(accountId: UUID, amountEur: Decimal?, at: Date?)
     case setLiveSource(accountId: UUID, source: String?)

@@ -43,9 +43,10 @@ extension ToolCatalog {
             exports into an investment account; all or nothing, and a refusal says why. Lists the new trades, \
             corrected amounts and every fund's position after; fund_positions reads them back)
             - setBrokerCashAnchor {accountId, amountEur, at} (cash at the broker at the end of that day; later cash \
-            is the anchor plus transfers, minus buys, plus sells; amountEur null clears it)
+            is the anchor plus transfers, minus buys, plus sells; at is required with an amount; amountEur null clears it)
             - setCostBasisOpening {accountId, amountEur, at} (what was already paid into an investment account \
-            before that day; transfers in after it add to cost basis; amountEur null clears it)
+            before that day; transfers in after it add to cost basis; at is required with an amount; amountEur \
+            null clears it)
             - setLiveSource {accountId, source: "funds" | "t212" | null} (where an investment account's value comes \
             from: "funds" = the phone values its fund positions from fund prices (EODHD), "t212" = the Trading 212 \
             account, null = typed valuations only. Anything else is refused; crypto sources need a quantity, so \
@@ -106,7 +107,7 @@ extension ToolCatalog {
                             "heldUnits": .object(["type": "object", "additionalProperties": ["type": "number"],
                                                   "description": "Units held today per ISIN."]),
                             "amountEur": .object(["type": ["number", "null"], "description": "EUR amount; null clears it."]),
-                            "at": date("Day the anchor or opening refers to (YYYY-MM-DD)."),
+                            "at": date("Day the anchor or opening refers to (YYYY-MM-DD); required with amountEur."),
                             "source": .object(["type": ["string", "null"], "enum": [.string("funds"), .string("t212"), .null],
                                                "description": "Live value source, or null for typed valuations."]),
                         ]),
