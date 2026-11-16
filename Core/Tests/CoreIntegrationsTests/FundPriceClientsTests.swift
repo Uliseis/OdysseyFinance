@@ -117,13 +117,20 @@ final class FundPriceClientsTests: XCTestCase {
         XCTAssertEqual(EODHDClient.error(status: 403, body: "Forbidden"), .unauthorized)
         XCTAssertEqual(EODHDClient.error(status: 402, body: ""), .rateLimited)
         XCTAssertEqual(EODHDClient.error(status: 429, body: ""), .rateLimited)
-        XCTAssertEqual(
-            EODHDClient.error(status: 403, body: "You exceeded your daily API requests limit."),
-            .rateLimited)
         XCTAssertEqual(EODHDClient.error(status: 404, body: "Ticker Not Found."), .notFound)
         let long = String(repeating: "x", count: 500)
         XCTAssertEqual(EODHDClient.error(status: 500, body: long),
                        .badResponse(status: 500, body: String(repeating: "x", count: 200)))
+    }
+
+    // Only the status decides: "limit" turns up in plenty of error bodies that aren't the daily limit.
+    func testEODHDErrorMappingIgnoresALimitInTheBody() {
+        let body = "Example error: rate limit details"
+        XCTAssertEqual(EODHDClient.error(status: 401, body: body), .unauthorized)
+        XCTAssertEqual(EODHDClient.error(status: 403, body: body), .unauthorized)
+        XCTAssertEqual(EODHDClient.error(status: 404, body: body), .notFound)
+        XCTAssertEqual(EODHDClient.error(status: 500, body: body), .badResponse(status: 500, body: body))
+        XCTAssertEqual(EODHDClient.error(status: 503, body: body), .badResponse(status: 503, body: body))
     }
 
     func testEODHDLatestTakesTheNewestRowOfATwoWeekWindow() async throws {

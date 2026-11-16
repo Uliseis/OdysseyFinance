@@ -86,9 +86,10 @@ public struct EODHDClient: FundPriceSource, Sendable {
         return data
     }
 
+    // The status alone decides; only a 200 that isn't JSON is read for the daily limit.
     static func error(status: Int, body: String) -> FundPriceError {
-        if status == 402 || status == 429 || mentionsLimit(body) { return .rateLimited }
         switch status {
+        case 402, 429: return .rateLimited
         case 401, 403: return .unauthorized
         case 404: return .notFound
         default: return .badResponse(status: status, body: String(body.prefix(FundPriceError.snippetLength)))
