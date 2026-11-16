@@ -29,6 +29,7 @@ struct SettingsView: View {
                 Section {
                     SettingsLinkRow(title: "Connections", systemImage: "link", destination: .connections)
                     SettingsLinkRow(title: "Trading 212", systemImage: "chart.line.uptrend.xyaxis", destination: .trading212)
+                    SettingsLinkRow(title: "Fund Prices (EODHD)", systemImage: "chart.bar.doc.horizontal", destination: .fundPrices)
                 }
                 Section("Money") {
                     SettingsLinkRow(title: "Transfers", systemImage: "arrow.left.arrow.right", destination: .transfers)
@@ -91,6 +92,7 @@ struct SettingsView: View {
                 case .spaces: ManageSpacesView()
                 case .groups: ManageGroupsView()
                 case .trading212: Trading212SettingsView()
+                case .fundPrices: FundPricesSettingsView()
                 case .claude: ClaudeSettingsView()
                 }
             }
@@ -165,6 +167,7 @@ struct SettingsView: View {
             if let first = debugConnections.first { path.append(first) }
         case "transfers": path.append(SettingsDestination.transfers)
         case "trading212": path.append(SettingsDestination.trading212)
+        case "fund-prices": path.append(SettingsDestination.fundPrices)
         case "automations": path.append(SettingsDestination.automations)
         case "claude": path.append(SettingsDestination.claude)
         case "spaces", "space-edit": path.append(SettingsDestination.spaces)
@@ -184,7 +187,7 @@ struct SettingsView: View {
 }
 
 enum SettingsDestination: Hashable {
-    case connections, transfers, sharedExpenses, budgets, categories, rules, transferRoutes, spaces, groups, trading212, automations, claude
+    case connections, transfers, sharedExpenses, budgets, categories, rules, transferRoutes, spaces, groups, trading212, fundPrices, automations, claude
 }
 
 // A Settings navigation row: teal icon chip + title, pushing a destination.
