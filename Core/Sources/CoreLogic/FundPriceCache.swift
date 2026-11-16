@@ -39,6 +39,8 @@ extension CoreLogic {
         public var funds: [String: Entry] = [:]
         public var requestDay: Date?
         public var requestCount = 0
+        // By ISIN: the day EODHD last said it doesn't list the fund, so it's asked at most once a day.
+        public var failedLookups: [String: Date] = [:]
 
         public init() {}
 
@@ -50,6 +52,7 @@ extension CoreLogic {
                 .compactMapValues(\.entry) ?? [:]
             requestDay = try c.decodeIfPresent(Date.self, forKey: .requestDay)
             requestCount = try c.decode(Int.self, forKey: .requestCount)
+            failedLookups = try c.decodeIfPresent([String: Date].self, forKey: .failedLookups) ?? [:]
         }
 
         private struct LossyEntry: Decodable {

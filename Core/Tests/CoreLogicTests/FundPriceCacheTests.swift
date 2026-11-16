@@ -62,6 +62,7 @@ final class FundPriceCacheTests: XCTestCase {
             pendingPrice: Decimal(string: "7.4321"), pendingDay: day)
         cache.requestDay = day
         cache.requestCount = 3
+        cache.failedLookups["ZZ0000000B09"] = day
         try file.save(cache)
         let loaded = try XCTUnwrap(file.load())
         XCTAssertEqual(loaded, cache)
