@@ -179,18 +179,11 @@ extension CoreLogic {
             }
 
             let today = Funds.dayStart(now)
-            // A cache that can't be read can't say how many requests today already made: assume
-            // all of them. Saving it below replaces the unreadable file.
-            var cache = store.load() ?? {
-                var spent = FundPriceCache()
-                spent.requestDay = today
-                spent.requestCount = fundRequestsPerDay
-                return spent
-            }()
             let refresh = await refreshPrices(
                 Set(ready.flatMap { $0.held.map(\.isin) }).sorted(),
-                cache: &cache, source: makeSource(apiKey), today: today)
-            do { try store.save(cache) } catch { outcome.failures.append("Fund prices weren't cached: \(error)") }
+                store: store, source: makeSource(apiKey), today: today)
+            let cache = refresh.cache
+            if let why = refresh.saveFailure { outcome.failures.append("Fund prices weren't cached: \(why)") }
 
             var values: [UUID: (market: Decimal, cash: Decimal)] = [:]
             var notices: Set<String> = []
@@ -230,55 +223,71 @@ extension CoreLogic {
         }
 
         private struct PriceRefresh {
+            var cache: FundPriceCache
             // By ISIN: why a fund's cached price, if it has one, wasn't refreshed.
             var notRefreshed: [String: String] = [:]
             // By ISIN: a new price the jump guard refused.
             var jumps: [String: String] = [:]
+            var saveFailure: String?
         }
 
         // A name and currency once per fund, a price at most once per fund per UTC day, and no
-        // request past the daily cap.
+        // request past the daily cap. Saved after every request, so a process killed mid-run
+        // still counts what it sent.
         @MainActor
         private static func refreshPrices(
-            _ isins: [String], cache: inout FundPriceCache, source: any FundPriceSource, today: Date
+            _ isins: [String], store: any FundPriceCacheStore, source: any FundPriceSource, today: Date
         ) async -> PriceRefresh {
-            var result = PriceRefresh()
-            if cache.requestDay != today {
-                cache.requestDay = today
-                cache.requestCount = 0
+            let loaded = store.load()
+            var result = PriceRefresh(cache: loaded ?? FundPriceCache())
+            func save() {
+                do { try store.save(result.cache) } catch { result.saveFailure = "\(error)" }
+            }
+            if loaded == nil {
+                // An unreadable cache can't say how many requests today already made: assume all
+                // of them, and replace the file so tomorrow starts clean.
+                result.cache.requestDay = today
+                result.cache.requestCount = fundRequestsPerDay
+                save()
+            }
+            if result.cache.requestDay != today {
+                result.cache.requestDay = today
+                result.cache.requestCount = 0
             }
             let capReached = "no EODHD requests left today"
             for isin in isins {
-                if cache.funds[isin] == nil {
-                    guard cache.requestCount < fundRequestsPerDay else {
+                if result.cache.funds[isin] == nil {
+                    guard result.cache.requestCount < fundRequestsPerDay else {
                         result.notRefreshed[isin] = capReached
                         continue
                     }
-                    cache.requestCount += 1
+                    result.cache.requestCount += 1
+                    defer { save() }
                     do {
                         let info = try await source.lookup(isin: isin)
-                        cache.funds[isin] = FundPriceCache.Entry(name: info.name, currency: info.currency)
+                        result.cache.funds[isin] = FundPriceCache.Entry(name: info.name, currency: info.currency)
                     } catch {
-                        if error as? FundPriceError == .rateLimited { cache.requestCount = fundRequestsPerDay }
+                        if error as? FundPriceError == .rateLimited { result.cache.requestCount = fundRequestsPerDay }
                         result.notRefreshed[isin] = describe(error, notFound: "EODHD doesn't list this ISIN as a fund")
                         continue
                     }
                 }
-                guard var entry = cache.funds[isin], entry.currency == "EUR", entry.fetchedDay != today else {
+                guard var entry = result.cache.funds[isin], entry.currency == "EUR", entry.fetchedDay != today else {
                     continue
                 }
-                guard cache.requestCount < fundRequestsPerDay else {
+                guard result.cache.requestCount < fundRequestsPerDay else {
                     result.notRefreshed[isin] = capReached
                     continue
                 }
-                cache.requestCount += 1
+                result.cache.requestCount += 1
+                defer { save() }
                 do {
                     let quote = try await source.latest(isin: isin, currency: entry.currency)
                     entry.fetchedDay = today
                     result.jumps[isin] = accept(quote, into: &entry)
-                    cache.funds[isin] = entry
+                    result.cache.funds[isin] = entry
                 } catch {
-                    if error as? FundPriceError == .rateLimited { cache.requestCount = fundRequestsPerDay }
+                    if error as? FundPriceError == .rateLimited { result.cache.requestCount = fundRequestsPerDay }
                     result.notRefreshed[isin] = describe(error, notFound: "EODHD has no recent price for it")
                 }
             }

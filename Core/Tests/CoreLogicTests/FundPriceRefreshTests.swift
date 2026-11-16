@@ -108,6 +108,17 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(cache.cache.requestCount, 4)
     }
 
+    func testTheCacheIsSavedAfterEveryRequest() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+
+        _ = await run(ctx)
+
+        XCTAssertEqual(cache.saves.map(\.requestCount), [1, 2, 3, 4],
+                       "a process killed mid-run still remembers the requests it sent")
+        XCTAssertEqual(cache.saves.dropFirst().first?.funds[a]?.price, d("7.4321"))
+    }
+
     func testNameAndCurrencyAreLookedUpOnce() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
@@ -355,10 +366,12 @@ private final class FakeFundSource: FundPriceSource {
 private final class MemoryFundPriceCache: FundPriceCacheStore {
     var cache = CoreLogic.FundPriceCache()
     var unreadable = false
+    private(set) var saves: [CoreLogic.FundPriceCache] = []
     func load() -> CoreLogic.FundPriceCache? { unreadable ? nil : cache }
     func save(_ cache: CoreLogic.FundPriceCache) throws {
         self.cache = cache
         unreadable = false
+        saves.append(cache)
     }
 }
 
