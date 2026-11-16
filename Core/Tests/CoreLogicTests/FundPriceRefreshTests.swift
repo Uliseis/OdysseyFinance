@@ -225,16 +225,23 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(try valuations(acc, ctx).count, 1)
     }
 
-    func testACancelledRunMakesNoRequests() async throws {
+    func testACallerCancelledMidRunDoesntCutItShortForTheOthers() async throws {
         let ctx = try S.makeContext()
-        _ = try makeAccount(ctx)
+        let acc = try makeAccount(ctx)
+        source.delay = .milliseconds(20)
+        var first: Task<R.Outcome, Never>?
+        source.onRequest = { first?.cancel() }
 
-        let task = Task { await run(ctx) }
-        task.cancel()
-        _ = await task.value
+        first = Task { await run(ctx) }
+        let second = Task { await run(ctx) }
+        let outcome = await second.value
+        _ = await first?.value
 
-        XCTAssertEqual(source.lookups + source.latests, [])
-        XCTAssertEqual(cache.cache.requestCount, 0)
+        XCTAssertEqual(source.lookups, [a, b])
+        XCTAssertEqual(source.latests, [a, b])
+        XCTAssertEqual(cache.cache.requestCount, 4)
+        XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
+        XCTAssertEqual(try valuations(acc, ctx).count, 1)
     }
 
     func testARequestEndingInCancellationIsNotCountedAndEndsTheRequests() async throws {
@@ -583,11 +590,14 @@ private final class FakeFundSource: FundPriceSource {
     var latestErrors: [String: any Error] = [:]
     // Long enough for a second run to start while a request is out.
     var delay: Duration = .zero
+    // Called as each request goes out.
+    var onRequest: (() -> Void)?
     private(set) var lookups: [String] = []
     private(set) var latests: [String] = []
 
     func lookup(isin: String) async throws -> FundInfo {
         lookups.append(isin)
+        onRequest?()
         if delay > .zero { try await Task.sleep(for: delay) }
         if let error = lookupErrors[isin] { throw error }
         guard let info = infos[isin] else { throw FundPriceError.notFound }
@@ -596,6 +606,7 @@ private final class FakeFundSource: FundPriceSource {
 
     func latest(isin: String, currency: String) async throws -> FundQuote {
         latests.append(isin)
+        onRequest?()
         if delay > .zero { try await Task.sleep(for: delay) }
         if let error = latestErrors[isin] { throw error }
         guard let quote = quotes[isin] else { throw FundPriceError.notFound }
