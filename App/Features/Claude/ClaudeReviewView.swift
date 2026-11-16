@@ -228,9 +228,14 @@ struct ClaudeOpSection: View {
         case "mirrorTransfer": "Mirror Transfer"
         case "createSharedGroupFromCredit": "Shared Expense From a Payback"
         case "archiveAccount": "Archive Account"
+        case "importFundOrders": "Import Fund Orders"
+        case "setBrokerCashAnchor": "Set Broker Cash"
+        case "setCostBasisOpening": "Set Amount Paid In"
+        case "setLiveSource": "Set Value Source"
         case "restoreCategories": "Restore Categories"
         case "deleteCategory": "Remove Category"
         case "deleteValuation": "Remove Valuation"
+        case "restoreFundTrades": "Undo Fund Import"
         default: op
         }
     }
