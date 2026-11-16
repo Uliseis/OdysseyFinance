@@ -6,9 +6,15 @@ public enum MarketKeyError: Error, Equatable {
     case keychain(OSStatus)
 }
 
+// What the live-value refresh reads, so its tests can stand in for the Keychain.
+public protocol MarketKeys: Sendable {
+    func loadTrading212() throws -> Trading212Credentials
+    func loadEODHD() throws -> String
+}
+
 // Same storage shape as EBKeychain (iCloud-synced generic passwords, device-unlock gated,
 // biometrics provided by the app's Face ID gate) for the market-data API credentials.
-public struct MarketKeychain: Sendable {
+public struct MarketKeychain: MarketKeys, Sendable {
     public let service: String
     public init(service: String = "com.uliseis.odysseyfinance.market") {
         self.service = service
