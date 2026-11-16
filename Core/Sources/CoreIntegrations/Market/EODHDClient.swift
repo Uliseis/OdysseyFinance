@@ -38,6 +38,22 @@ public struct EODHDClient: FundPriceSource, Sendable {
         return req
     }
 
+    func makeSearchRequest(isin: String) -> URLRequest {
+        var comps = URLComponents(
+            url: baseURL.appendingPathComponent("search/\(isin)"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "api_token", value: apiKey),
+            URLQueryItem(name: "fmt", value: "json"),
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        return req
+    }
+
+    public func lookup(isin: String) async throws -> FundInfo {
+        try Self.decodeSearch(try await fetch(makeSearchRequest(isin: isin)), isin: isin)
+    }
+
     public func latest(isin: String, currency: String) async throws -> FundQuote {
         try await latest(isin: isin, currency: currency, asOf: .now)
     }
@@ -106,6 +122,23 @@ public struct EODHDClient: FundPriceSource, Sendable {
         return quotes.sorted { $0.day < $1.day }
     }
 
+    // Search also matches the same ISIN listed on stock exchanges; only the EUFUND row is the
+    // fund's NAV, the one /eod serves.
+    public static func decodeSearch(_ data: Data, isin: String) throws -> FundInfo {
+        let rows: [SearchRow]
+        do {
+            rows = try JSONDecoder().decode([SearchRow].self, from: data)
+        } catch {
+            let body = String(decoding: data, as: UTF8.self)
+            if mentionsLimit(body) { throw FundPriceError.rateLimited }
+            throw FundPriceError.parse("EODHD body is not a search result: \(body.prefix(80))")
+        }
+        guard let row = rows.first(where: { $0.Exchange == "EUFUND" && $0.ISIN == isin }),
+              let name = row.Name, let currency = row.Currency
+        else { throw FundPriceError.notFound }
+        return FundInfo(isin: isin, name: name, currency: currency)
+    }
+
     // JSONDecoder has decoded Decimal through Double on some Foundation versions
     // (5.1234 -> 5.123400000000001024); reading the close token as text keeps the NAV's digits.
     static func quotingClose(_ data: Data) -> Data {
@@ -119,5 +152,13 @@ public struct EODHDClient: FundPriceSource, Sendable {
     struct Row: Decodable {
         let date: String
         let close: String?
+    }
+
+    // Optional throughout: a null in an unrelated listing mustn't fail the whole search.
+    struct SearchRow: Decodable {
+        let Exchange: String?
+        let Name: String?
+        let Currency: String?
+        let ISIN: String?
     }
 }

@@ -177,6 +177,93 @@ final class FundPriceClientsTests: XCTestCase {
         }
     }
 
+    // MARK: EODHD search
+
+    func testEODHDSearchRequestAddressesTheISINWithTheKeyOnlyInApiToken() {
+        let req = EODHDClient(apiKey: key).makeSearchRequest(isin: isin)
+        XCTAssertEqual(req.url?.host, "eodhd.com")
+        XCTAssertEqual(req.url?.path, "/api/search/ZZ0000000A00")
+        XCTAssertEqual(query(req), ["api_token": key, "fmt": "json"])
+        XCTAssertEqual(req.url!.absoluteString.components(separatedBy: key).count, 2)
+    }
+
+    func testEODHDSearchTakesTheEUFUNDRowForTheISIN() throws {
+        let json = Data("""
+        [
+          {"Code":"0P0000ZZZA","Exchange":"EUFUND","Name":"Example Other Fund","Type":"FUND","Country":"Unknown","Currency":"USD","ISIN":"ZZ0000000B09","previousClose":2.0468},
+          {"Code":"ZZXA","Exchange":"F","Name":"Example Fund Listing","Type":"FUND","Country":"Germany","Currency":"EUR","ISIN":"ZZ0000000A00","previousClose":7.4321},
+          {"Code":"0P0000ZZZB","Exchange":"EUFUND","Name":"Example World Index Fund EUR Acc","Type":"FUND","Country":"Unknown","Currency":"EUR","ISIN":"ZZ0000000A00","previousClose":7.4321},
+          {"Code":"ZZXB","Exchange":"US","Name":"Example Without ISIN","Type":"Common Stock","Country":"USA","Currency":null,"ISIN":null}
+        ]
+        """.utf8)
+        XCTAssertEqual(try EODHDClient.decodeSearch(json, isin: isin), FundInfo(
+            isin: isin, name: "Example World Index Fund EUR Acc", currency: "EUR"))
+    }
+
+    func testEODHDSearchWithoutAnEUFUNDRowIsNotFound() {
+        let listedElsewhere = Data(#"[{"Code":"ZZXA","Exchange":"F","Name":"Example","Type":"FUND","Currency":"EUR","ISIN":"ZZ0000000A00"}]"#.utf8)
+        for body in [listedElsewhere, Data("[]".utf8)] {
+            XCTAssertThrowsError(try EODHDClient.decodeSearch(body, isin: isin)) {
+                XCTAssertEqual($0 as? FundPriceError, .notFound)
+            }
+        }
+    }
+
+    func testEODHDSearchOfAnUnreadableBodyIsAParseErrorOrTheDailyLimit() {
+        XCTAssertThrowsError(try EODHDClient.decodeSearch(
+            Data("You exceeded your daily API requests limit.".utf8), isin: isin)
+        ) { XCTAssertEqual($0 as? FundPriceError, .rateLimited) }
+        XCTAssertThrowsError(try EODHDClient.decodeSearch(Data(#"{"unexpected":true}"#.utf8), isin: isin)) {
+            guard case .parse = $0 as? FundPriceError else { return XCTFail("\($0)") }
+        }
+    }
+
+    func testEODHDLookupMapsStatusesAndNeverCarriesTheKey() async {
+        let client = EODHDClient(apiKey: key, session: StubURLProtocol.session())
+        for (status, expected) in [(401, FundPriceError.unauthorized), (429, .rateLimited), (404, .notFound)] {
+            StubURLProtocol.handler = { _ in (status, Data()) }
+            do {
+                _ = try await client.lookup(isin: isin)
+                XCTFail("expected \(expected)")
+            } catch {
+                XCTAssertEqual(error as? FundPriceError, expected)
+            }
+        }
+
+        StubURLProtocol.handler = { req in (500, Data("bad gateway for \(req.url!.absoluteString)".utf8)) }
+        do {
+            _ = try await client.lookup(isin: isin)
+            XCTFail("expected badResponse")
+        } catch {
+            guard case .badResponse(500, let body) = error as? FundPriceError else { return XCTFail("\(error)") }
+            XCTAssertFalse(body.contains(key))
+        }
+
+        StubURLProtocol.handler = { req in
+            throw URLError(.timedOut, userInfo: [NSURLErrorFailingURLErrorKey: req.url!])
+        }
+        do {
+            _ = try await client.lookup(isin: isin)
+            XCTFail("expected a transport error")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .timedOut)
+            XCTAssertFalse(String(describing: error).contains(key))
+            XCTAssertFalse((error as NSError).userInfo.description.contains(key))
+        }
+    }
+
+    func testEODHDLookupReadsTheSearchResult() async throws {
+        var seen: URLRequest?
+        StubURLProtocol.handler = { req in
+            seen = req
+            return (200, Data(#"[{"Code":"0P0000ZZZB","Exchange":"EUFUND","Name":"Example Fund","Type":"FUND","Currency":"EUR","ISIN":"ZZ0000000A00"}]"#.utf8))
+        }
+        let client = EODHDClient(apiKey: key, session: StubURLProtocol.session())
+        let info = try await client.lookup(isin: isin)
+        XCTAssertEqual(info, FundInfo(isin: isin, name: "Example Fund", currency: "EUR"))
+        XCTAssertEqual(try XCTUnwrap(seen).url?.path, "/api/search/ZZ0000000A00")
+    }
+
     // MARK: Keychain
 
     func testEODHDKeyRoundTripsThroughTheKeychain() throws {
