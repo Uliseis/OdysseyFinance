@@ -39,7 +39,7 @@ extension CoreLogic {
         }
 
         // Minimal RFC 4180: quoted fields (which may span lines), doubled quotes, CRLF or LF.
-        static func records(_ text: String) -> [[String]] {
+        static func records(_ text: String, separator: Character = ",") -> [[String]] {
             var records: [[String]] = []
             var fields: [String] = []
             var current = ""
@@ -57,7 +57,7 @@ extension CoreLogic {
                     }
                 } else if c == "\"" {
                     inQuotes = true
-                } else if c == "," {
+                } else if c == separator {
                     fields.append(current); current = ""
                 } else if c == "\n" || c == "\r" || c == "\r\n" {
                     fields.append(current); current = ""
