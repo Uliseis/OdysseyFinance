@@ -176,4 +176,23 @@ final class FundPriceClientsTests: XCTestCase {
             XCTAssertFalse((error as NSError).userInfo.description.contains(key))
         }
     }
+
+    // MARK: Keychain
+
+    func testEODHDKeyRoundTripsThroughTheKeychain() throws {
+        let keychain = MarketKeychain(service: "com.uliseis.odysseyfinance.market.tests.\(UUID())")
+        defer { keychain.removeEODHD() }
+        do {
+            try keychain.storeEODHD(apiKey: key)
+        } catch MarketKeyError.keychain(let status) where status == errSecMissingEntitlement {
+            throw XCTSkip("synced keychain items need a signed host")
+        }
+        XCTAssertTrue(keychain.hasEODHD)
+        XCTAssertEqual(try keychain.loadEODHD(), key)
+        keychain.removeEODHD()
+        XCTAssertFalse(keychain.hasEODHD)
+        XCTAssertThrowsError(try keychain.loadEODHD()) {
+            XCTAssertEqual($0 as? MarketKeyError, .notFound)
+        }
+    }
 }
