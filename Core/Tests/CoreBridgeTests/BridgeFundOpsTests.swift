@@ -203,6 +203,14 @@ final class BridgeFundOpsTests: XCTestCase {
         let swapped = try refusal(importing(importOp(firstCash, firstOrders, [a: 18, b: 5]), into: s.funds))
         XCTAssertTrue(swapped.contains("orders export") && swapped.contains("Fecha de la orden;ISIN"), swapped)
 
+        // A wrong file can be one long line: only its start is quoted back.
+        let oneLine = String(repeating: "x", count: 5_000)
+        for (orders, movements) in [(oneLine, firstCash), (firstOrders, oneLine)] {
+            let wrongFile = try refusal(importing(importOp(orders, movements, [a: 18, b: 5]), into: s.funds))
+            XCTAssertTrue(wrongFile.contains("header is " + String(repeating: "x", count: 120) + "…;"), wrongFile)
+            XCTAssertFalse(wrongFile.contains(String(repeating: "x", count: 121)), wrongFile)
+        }
+
         let notInvestment = try refusal(importing(firstImport, into: s.cashAccount))
         XCTAssertTrue(notInvestment.contains("Checking isn't an investment account"), notInvestment)
     }
