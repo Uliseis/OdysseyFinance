@@ -132,26 +132,3 @@ struct BridgeFixture {
         cycleStartDay: 20, cycleStartsEarlyOnWeekends: true,
         automation: .init(pensionEnabled: false, pensionDeclinedArrivals: ["arrival-0"]))
 }
-
-extension BridgeSnapshot {
-    // Fetch order isn't stable, so compare snapshots with every array sorted by id.
-    func normalized() -> BridgeSnapshot {
-        var s = self
-        s.connections = s.connections.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.accountGroups = s.accountGroups.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.accountSpaces = s.accountSpaces.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.accounts = s.accounts.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.categories = s.categories.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.categoryRules = s.categoryRules.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.transferRoutes = s.transferRoutes.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.transferGroups = s.transferGroups.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.budgets = s.budgets.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.fxRates = s.fxRates.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.transactions = s.transactions.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.sharedExpenseGroups = s.sharedExpenseGroups.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.portfolioValuations = s.portfolioValuations.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.syncRuns = s.syncRuns.sorted { $0.id.uuidString < $1.id.uuidString }
-        s.bankDetails = s.bankDetails.sorted { $0.txId.uuidString < $1.txId.uuidString }
-        return s
-    }
-}

@@ -109,6 +109,40 @@ public struct BridgeAppState: Codable, Sendable, Equatable {
     }
 }
 
+extension BridgeSnapshot {
+    // Fetch order isn't stable, so compare snapshots with every array sorted by id.
+    public func normalized() -> BridgeSnapshot {
+        var s = self
+        s.connections = s.connections.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.accountGroups = s.accountGroups.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.accountSpaces = s.accountSpaces.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.accounts = s.accounts.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.categories = s.categories.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.categoryRules = s.categoryRules.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.transferRoutes = s.transferRoutes.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.transferGroups = s.transferGroups.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.budgets = s.budgets.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.fxRates = s.fxRates.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.transactions = s.transactions.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.sharedExpenseGroups = s.sharedExpenseGroups.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.portfolioValuations = s.portfolioValuations.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.syncRuns = s.syncRuns.sorted { $0.id.uuidString < $1.id.uuidString }
+        s.bankDetails = s.bankDetails.sorted { $0.txId.uuidString < $1.txId.uuidString }
+        return s
+    }
+
+    // The phone rewrites the file only when the data changed, plus once an hour so its age
+    // still tells Claude when the app was last open.
+    public static let unchangedRewriteInterval: TimeInterval = 3600
+
+    public func needsWrite(over old: BridgeSnapshot?) -> Bool {
+        guard let old, exportedAt.timeIntervalSince(old.exportedAt) < Self.unchangedRewriteInterval else { return true }
+        var a = normalized(), b = old.normalized()
+        a.exportedAt = b.exportedAt
+        return a != b
+    }
+}
+
 public enum BridgeCoding {
     // Dates stay as seconds since the reference date: exact, unlike ISO 8601 strings.
     public static func encoder() -> JSONEncoder { JSONEncoder() }

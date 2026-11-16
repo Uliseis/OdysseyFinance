@@ -45,10 +45,14 @@ enum ClaudeBridge {
         do {
             let snapshot = try BridgeExport.make(in: ctx, appState: appState, redact: true)
             let url = root.appending(path: "snapshot.json")
-            try await Task.detached(priority: .utility) {
+            let wrote = try await Task.detached(priority: .utility) {
+                // Only the phone writes this file, so a plain read is safe; missing means write.
+                let old = try? BridgeCoding.decoder().decode(BridgeSnapshot.self, from: Data(contentsOf: url))
+                guard snapshot.needsWrite(over: old) else { return false }
                 try write(try BridgeCoding.encoder().encode(snapshot), to: url)
+                return true
             }.value
-            print("[ClaudeBridge] snapshot written to \(url.path)")
+            print(wrote ? "[ClaudeBridge] snapshot written to \(url.path)" : "[ClaudeBridge] snapshot unchanged; not rewritten")
         } catch {
             print("[ClaudeBridge] snapshot export failed: \(error)")
         }
