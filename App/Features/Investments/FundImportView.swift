@@ -30,6 +30,8 @@ struct FundImportView: View {
     private struct UnitsField: Identifiable {
         let isin: String
         var text: String
+        // Why a fund imported before starts empty.
+        let hint: String?
         var id: String { isin }
         // Empty means sold. Not a locale-bound number field: under es-ES "12.345" would read as 12345.
         var units: Decimal? { CoreLogic.Transactions.parseQuantity(text) }
@@ -111,28 +113,33 @@ struct FundImportView: View {
                 Text("This export has no fund orders.").foregroundStyle(.secondary)
             }
             ForEach($units) { $field in
-                // Not LabeledContent: its field takes the row and cuts a long fund name to one line.
-                HStack(spacing: Theme.Space.s) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(names[field.isin] ?? field.isin).axLineLimit(3)
-                        if names[field.isin] != nil {
-                            Text(field.isin).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    // Not LabeledContent: its field takes the row and cuts a long fund name to one line.
+                    HStack(spacing: Theme.Space.s) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(names[field.isin] ?? field.isin).axLineLimit(3)
+                            if names[field.isin] != nil {
+                                Text(field.isin).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
+                        Spacer(minLength: 0)
+                        TextField("0", text: $field.text)
+                            .multilineTextAlignment(.trailing)
+                            .font(.readout(.body, weight: .regular))
+                            .keyboardType(.decimalPad)
+                            .foregroundStyle(field.isInvalid ? Color.negativeAmount : Color.primary)
+                            .frame(maxWidth: 120)
+                            .accessibilityLabel("Units of \(names[field.isin] ?? field.isin)")
                     }
-                    Spacer(minLength: 0)
-                    TextField("0", text: $field.text)
-                        .multilineTextAlignment(.trailing)
-                        .font(.readout(.body, weight: .regular))
-                        .keyboardType(.decimalPad)
-                        .foregroundStyle(field.isInvalid ? Color.negativeAmount : Color.primary)
-                        .frame(maxWidth: 120)
-                        .accessibilityLabel("Units of \(names[field.isin] ?? field.isin)")
+                    if let hint = field.hint {
+                        Text(hint).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
         } header: {
             Text("Units held today")
         } footer: {
-            Text("Units held today, as MyInvestor shows them; leave empty if sold. A fund imported before starts from its saved units plus this export's new orders as buys: correct it if any of them was a sale.")
+            Text("Units held today, as MyInvestor shows them; leave empty if sold. A fund imported before starts from its saved units when this export has no new orders for it.")
         }
     }
 
@@ -155,7 +162,9 @@ struct FundImportView: View {
             case .orders:
                 let guesses = try CoreLogic.FundTrades.guessHeldUnits(ordersCSV: text, for: account, in: ctx)
                 orders = export
-                units = guesses.map { UnitsField(isin: $0.isin, text: $0.units.map(Self.unitsText) ?? "") }
+                units = guesses.map {
+                    UnitsField(isin: $0.isin, text: $0.prefill.map(Self.unitsText) ?? "", hint: FundImportText.unitsHint($0))
+                }
             case .movements:
                 _ = try CoreLogic.MyInvestorMovementsCSV.parse(text)
                 movements = export

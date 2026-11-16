@@ -722,13 +722,10 @@ final class FundTradesTests: XCTestCase {
 
     // MARK: - Held units guess
 
-    func testEveryFundInTheExportIsListedAndOnlySavedOnesAreGuessed() throws {
-        let ctx = try S.makeContext()
-        let acc = try makeInvestmentAccount(ctx)
-        try T.importOrders(ordersCSV: firstExport, movementsCSV: firstCash, heldUnits: [a: 18, b: 5], into: acc, in: ctx)
-
-        let guesses = try T.guessHeldUnits(ordersCSV: csv(
-            "15/04/2030;\(c);30.00 EUR;;Cancelada",
+    // Against the first import (a holds 18 and b 5): a has two new done orders, b's only new
+    // order isn't done, and c has never been saved.
+    private var laterExport: String {
+        csv("15/04/2030;\(c);30.00 EUR;;Cancelada",
             "12/04/2030;\(b);20.00 EUR;;En curso",
             "10/04/2030;\(a);60.00 EUR;6,000;Finalizada",
             "20/03/2030;\(a);125.00 EUR;12,000;Finalizada",
@@ -736,18 +733,44 @@ final class FundTradesTests: XCTestCase {
             "15/02/2030;\(b);50.00 EUR;5,000;Finalizada",
             // Identical to a saved order, so it's numbered as a second one and is new.
             "20/01/2030;\(a);100.00 EUR;10,000;Finalizada",
-            "20/01/2030;\(a);100.00 EUR;10,000;Finalizada"
-        ), for: acc, in: ctx)
+            "20/01/2030;\(a);100.00 EUR;10,000;Finalizada")
+    }
 
-        // a: 18 saved, plus 6 and 10 new read as buys. b: its only new order isn't done.
-        XCTAssertEqual(guesses, [
-            T.HeldUnitsGuess(isin: a, units: 34),
-            T.HeldUnitsGuess(isin: b, units: 5),
-            T.HeldUnitsGuess(isin: c, units: nil),
+    func testEveryFundInTheExportIsListedWithItsSavedUnitsAndNewDoneOrders() throws {
+        let ctx = try S.makeContext()
+        let acc = try makeInvestmentAccount(ctx)
+        try T.importOrders(ordersCSV: firstExport, movementsCSV: firstCash, heldUnits: [a: 18, b: 5], into: acc, in: ctx)
+
+        XCTAssertEqual(try T.guessHeldUnits(ordersCSV: laterExport, for: acc, in: ctx), [
+            T.HeldUnitsGuess(isin: a, savedUnits: 18, newOrders: 2),
+            T.HeldUnitsGuess(isin: b, savedUnits: 5, newOrders: 0),
+            T.HeldUnitsGuess(isin: c, savedUnits: nil, newOrders: 0),
         ])
     }
 
-    func testAFundSoldOutWithNothingNewIsGuessedAtZero() throws {
+    // Saved units plus the new orders read as buys would pass the import's units check even
+    // when one of them was a sale.
+    func testOnlyAFundWithSavedTradesAndNoNewOrdersIsPrefilled() throws {
+        let ctx = try S.makeContext()
+        let acc = try makeInvestmentAccount(ctx)
+        try T.importOrders(ordersCSV: firstExport, movementsCSV: firstCash, heldUnits: [a: 18, b: 5], into: acc, in: ctx)
+
+        XCTAssertEqual(try T.guessHeldUnits(ordersCSV: laterExport, for: acc, in: ctx).map(\.prefill), [nil, 5, nil])
+    }
+
+    func testAFundNeverImportedHasNoSavedUnitsAndNoPrefill() throws {
+        let ctx = try S.makeContext()
+        let acc = try makeInvestmentAccount(ctx)
+
+        let guesses = try T.guessHeldUnits(ordersCSV: firstExport, for: acc, in: ctx)
+        XCTAssertEqual(guesses, [
+            T.HeldUnitsGuess(isin: a, savedUnits: nil, newOrders: 3),
+            T.HeldUnitsGuess(isin: b, savedUnits: nil, newOrders: 1),
+        ])
+        XCTAssertEqual(guesses.map(\.prefill), [nil, nil])
+    }
+
+    func testAFundSoldOutWithNothingNewIsPrefilledAtZero() throws {
         let ctx = try S.makeContext()
         let acc = try makeInvestmentAccount(ctx)
         let orders = csv("20/02/2030;\(a);110.00 EUR;10,000;Finalizada",
@@ -755,7 +778,9 @@ final class FundTradesTests: XCTestCase {
         try T.importOrders(ordersCSV: orders, movementsCSV: cash([("21/02/2030", "110"), ("21/01/2030", "-100")]),
                            heldUnits: [:], into: acc, in: ctx)
 
-        XCTAssertEqual(try T.guessHeldUnits(ordersCSV: orders, for: acc, in: ctx), [T.HeldUnitsGuess(isin: a, units: 0)])
+        let guesses = try T.guessHeldUnits(ordersCSV: orders, for: acc, in: ctx)
+        XCTAssertEqual(guesses, [T.HeldUnitsGuess(isin: a, savedUnits: 0, newOrders: 0)])
+        XCTAssertEqual(guesses.first?.prefill, 0)
     }
 
     func testAGuessFromAFileThatIsntTheOrdersExportThrowsItsParseError() throws {

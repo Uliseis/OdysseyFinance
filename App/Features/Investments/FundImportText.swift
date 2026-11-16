@@ -24,6 +24,14 @@ enum FundImportText {
         return lines
     }
 
+    // For a fund imported before whose new orders may have sold some of it, so its field
+    // starts empty.
+    static func unitsHint(_ guess: CoreLogic.FundTrades.HeldUnitsGuess) -> String? {
+        guard let saved = guess.savedUnits, guess.newOrders > 0 else { return nil }
+        let units = saved.formatted(.number.precision(.fractionLength(0...6)))
+        return "saved \(units) units · \(pluralized(guess.newOrders, "new order")) — enter today's units from MyInvestor"
+    }
+
     static func refusal(_ error: Error, names: [String: String]) -> String {
         func funds(_ isins: [String]) -> String { isins.map { names[$0] ?? $0 }.formatted(.list(type: .and)) }
         func orders(_ keys: [String]) -> String { keys.map { order($0, names: names) }.joined(separator: "\n") }
