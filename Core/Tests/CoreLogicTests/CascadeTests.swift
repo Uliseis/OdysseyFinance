@@ -151,6 +151,42 @@ final class CascadeTests: XCTestCase {
         XCTAssertFalse(remaining.contains { $0.persistentModelID == vID })
     }
 
+    func testDeletingAccountCascadesToFundTrades() throws {
+        let ctx = try makeContext()
+        let account = makeAccount(ctx)
+        let trade = FundTrade(account: account, isin: "ZZ0000000A00", tradeDate: .now,
+                              side: .buy, units: 10, amountEur: 1000)
+        ctx.insert(trade)
+        try ctx.save()
+
+        let tradeID = trade.persistentModelID
+        ctx.delete(account)
+        try ctx.save()
+
+        let remaining = try ctx.fetch(FetchDescriptor<FundTrade>())
+        XCTAssertFalse(remaining.contains { $0.persistentModelID == tradeID })
+    }
+
+    func testDeletingFundTradeLeavesAccount() throws {
+        let ctx = try makeContext()
+        let account = makeAccount(ctx)
+        let kept = FundTrade(account: account, isin: "ZZ0000000A00", tradeDate: .now,
+                             side: .buy, units: 10, amountEur: 1000)
+        let deleted = FundTrade(account: account, isin: "ZZ0000000A00", tradeDate: .now,
+                                side: .sell, units: 4, amountEur: 450)
+        ctx.insert(kept)
+        ctx.insert(deleted)
+        try ctx.save()
+
+        let accountID = account.persistentModelID
+        ctx.delete(deleted)
+        try ctx.save()
+
+        let survivor = try ctx.fetch(FetchDescriptor<Account>()).first { $0.persistentModelID == accountID }
+        XCTAssertNotNil(survivor, "Account should survive deleting one of its fund trades")
+        XCTAssertEqual(survivor?.fundTrades.map(\.id), [kept.id])
+    }
+
     // Connection → Accounts → Transactions, transitively, in one delete.
     func testDeletingConnectionCascadesTransitively() throws {
         let ctx = try makeContext()

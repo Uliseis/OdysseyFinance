@@ -154,6 +154,10 @@ public final class Account {
     public var liveValueSource: String?
     // Units held, for crypto:* sources. Value = assetQuantity x live price.
     public var assetQuantity: Decimal?
+    // Cash held at the broker on brokerCashAnchorAt; later cash = anchor + transfers since
+    // − fund buys + fund sells.
+    public var brokerCashAnchorEur: Decimal?
+    public var brokerCashAnchorAt: Date?
     public var createdAt: Date
     // Last-modified clock for LWW sync. Bumped by CoreLogic mutations via touch().
     public var updatedAt: Date
@@ -163,6 +167,9 @@ public final class Account {
 
     @Relationship(deleteRule: .cascade, inverse: \PortfolioValuation.account)
     public var valuations: [PortfolioValuation] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \FundTrade.account)
+    public var fundTrades: [FundTrade] = []
 
     @Relationship(deleteRule: .cascade, inverse: \TransferRoute.targetAccount)
     public var incomingRoutes: [TransferRoute] = []
@@ -201,6 +208,8 @@ public final class Account {
         costBasisOpeningAt: Date? = nil,
         liveValueSource: String? = nil,
         assetQuantity: Decimal? = nil,
+        brokerCashAnchorEur: Decimal? = nil,
+        brokerCashAnchorAt: Date? = nil,
         createdAt: Date = .now,
         updatedAt: Date? = nil
     ) {
@@ -227,6 +236,8 @@ public final class Account {
         self.costBasisOpeningAt = costBasisOpeningAt
         self.liveValueSource = liveValueSource
         self.assetQuantity = assetQuantity
+        self.brokerCashAnchorEur = brokerCashAnchorEur
+        self.brokerCashAnchorAt = brokerCashAnchorAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
     }
@@ -581,6 +592,53 @@ public final class PortfolioValuation {
     }
 }
 
+// One order from a broker's export. Units, cost and realised gains per fund derive from
+// these; nothing about a position is typed.
+@Model
+public final class FundTrade {
+    @Attribute(.unique) public var id: UUID
+    public var account: Account?
+    public var isin: String
+    // UTC start of day of the order date.
+    public var tradeDate: Date
+    public var side: FundTradeSide
+    public var units: Decimal
+    // Always positive: cash out for a buy, cash in for a sell.
+    public var amountEur: Decimal
+    // Shared by the sell and buy legs of one fund switch (a Spanish "traspaso").
+    public var switchGroupId: UUID?
+    // Natural key from the export, so importing the same file twice adds nothing.
+    public var importKey: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        account: Account? = nil,
+        isin: String,
+        tradeDate: Date,
+        side: FundTradeSide,
+        units: Decimal,
+        amountEur: Decimal,
+        switchGroupId: UUID? = nil,
+        importKey: String? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.id = id
+        self.account = account
+        self.isin = isin
+        self.tradeDate = tradeDate
+        self.side = side
+        self.units = units
+        self.amountEur = amountEur
+        self.switchGroupId = switchGroupId
+        self.importKey = importKey
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 @Model
 public final class SyncRun {
     @Attribute(.unique) public var id: UUID
@@ -620,7 +678,7 @@ public final class SyncRun {
 // system fields ("lastKnownRecord") per synced record, keyed by the record's UUID.
 // Lets the push layer reuse the server change tag so edits save as updates, not
 // duplicate inserts — the pattern from Apple's CKSyncEngine sample. Never enqueued for
-// push (it's not among the 14 RecordTypes, and only the engine's context writes it).
+// push (it's not among the 15 RecordTypes, and only the engine's context writes it).
 @Model
 public final class SyncRecordMeta {
     @Attribute(.unique) public var id: UUID
@@ -647,6 +705,7 @@ public enum CoreModelSchema {
         Transaction.self,
         SharedExpenseGroup.self,
         PortfolioValuation.self,
+        FundTrade.self,
         SyncRun.self,
         SyncRecordMeta.self,
     ]

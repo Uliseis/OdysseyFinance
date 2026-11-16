@@ -74,6 +74,7 @@ public enum PushPipeline {
         fetch(Transaction.self)
         fetch(SharedExpenseGroup.self)
         fetch(PortfolioValuation.self)
+        fetch(FundTrade.self)
         fetch(SyncRun.self)
         return pendingChanges(inserted: models, updated: [], deleted: [])
     }
@@ -110,7 +111,7 @@ public enum PushPipeline {
     static func cascadeDescendantIDs(_ m: any PersistentModel) -> [UUID] {
         if let a = m as? Account {
             return a.transactions.flatMap { [$0.id] + cascadeDescendantIDs($0) }
-                + a.valuations.map(\.id)
+                + a.valuations.map(\.id) + a.fundTrades.map(\.id)
                 + a.incomingRoutes.map(\.id) + a.outgoingRoutes.map(\.id)
         }
         if let t = m as? Transaction {
@@ -187,6 +188,9 @@ public enum PushPipeline {
         if let m = ModelSnapshots.find(portfolioValuation: uuid, in: ctx) {
             return RecordCoding.encode(ModelSnapshots.snapshot(m))
         }
+        if let m = ModelSnapshots.find(fundTrade: uuid, in: ctx) {
+            return RecordCoding.encode(ModelSnapshots.snapshot(m))
+        }
         if let m = ModelSnapshots.find(accountGroup: uuid, in: ctx) {
             return RecordCoding.encode(ModelSnapshots.snapshot(m))
         }
@@ -214,6 +218,7 @@ public enum PushPipeline {
         if let x = m as? CategoryRule { return x.id }
         if let x = m as? Budget { return x.id }
         if let x = m as? PortfolioValuation { return x.id }
+        if let x = m as? FundTrade { return x.id }
         if let x = m as? AccountGroup { return x.id }
         if let x = m as? AccountSpace { return x.id }
         if let x = m as? Connection { return x.id }

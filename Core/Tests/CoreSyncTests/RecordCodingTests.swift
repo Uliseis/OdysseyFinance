@@ -54,6 +54,19 @@ final class RecordCodingTests: XCTestCase {
         XCTAssertEqual(decoded, snap)
     }
 
+    // Records written before the broker cash anchor existed carry neither key.
+    func test_account_recordWithoutBrokerCashAnchor_decodesAsNil() throws {
+        let snap = Build.account()
+        let record = RecordCoding.encode(snap)
+        record["brokerCashAnchorEur"] = nil
+        record["brokerCashAnchorAt"] = nil
+        let decoded = try RecordCoding.decodeAccount(record)
+        XCTAssertNil(decoded.brokerCashAnchorEur)
+        XCTAssertNil(decoded.brokerCashAnchorAt)
+        XCTAssertEqual(decoded.costBasisOpeningEur, snap.costBasisOpeningEur)
+        XCTAssertEqual(decoded.clock, snap.clock)
+    }
+
     func test_account_decimalPreservesPrecision() throws {
         let snap = AccountSnapshot(
             id: UUID(),
@@ -130,6 +143,26 @@ final class RecordCodingTests: XCTestCase {
         let snap = Build.portfolioValuation()
         let record = RecordCoding.encode(snap)
         let decoded = try RecordCoding.decodePortfolioValuation(record)
+        XCTAssertEqual(decoded, snap)
+    }
+
+    func test_fundTrade_roundTrip() throws {
+        let snap = Build.fundTrade()
+        let record = RecordCoding.encode(snap)
+        XCTAssertEqual(record.recordType, RecordType.fundTrade)
+        XCTAssertEqual(record.recordID.zoneID, SyncZone.id)
+        let decoded = try RecordCoding.decodeFundTrade(record)
+        XCTAssertEqual(decoded, snap)
+    }
+
+    func test_fundTrade_withoutOptionals_roundTrip() throws {
+        let snap = FundTradeSnapshot(
+            id: UUID(), accountId: nil,
+            isin: "ZZ0000000A00", tradeDate: Build.epoch, side: .buy,
+            units: Decimal(string: "0.000001")!, amountEur: Decimal(string: "0.01")!,
+            createdAt: Build.epoch, updatedAt: Build.later
+        )
+        let decoded = try RecordCoding.decodeFundTrade(RecordCoding.encode(snap))
         XCTAssertEqual(decoded, snap)
     }
 

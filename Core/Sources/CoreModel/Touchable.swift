@@ -18,6 +18,7 @@ extension Budget: Touchable {}
 extension TransferRoute: Touchable {}
 extension SharedExpenseGroup: Touchable {}
 extension PortfolioValuation: Touchable {}
+extension FundTrade: Touchable {}
 // FxRate (write-once, clock == createdAt), SyncRun, SyncRecordMeta intentionally excluded.
 
 public extension ModelContext {

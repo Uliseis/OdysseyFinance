@@ -73,6 +73,11 @@ public enum RuleMatch: String, Codable, CaseIterable, Sendable {
     case regex
 }
 
+public enum FundTradeSide: String, Codable, CaseIterable, Sendable {
+    case buy
+    case sell
+}
+
 public enum SyncRunStatus: String, Codable, CaseIterable, Sendable {
     case running
     case ok

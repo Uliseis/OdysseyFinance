@@ -65,6 +65,8 @@ enum Build {
             costBasisOpeningAt: epoch,
             liveValueSource: "crypto:bitcoin",
             assetQuantity: Decimal(string: "0.07123456"),
+            brokerCashAnchorEur: Decimal(string: "250.50"),
+            brokerCashAnchorAt: epoch,
             createdAt: epoch, clock: clock
         )
     }
@@ -184,6 +186,21 @@ enum Build {
             marketValueEur: Decimal(string: "51234.56")!,
             cashValueEur: Decimal(string: "1234.56"),
             notes: nil,
+            createdAt: epoch, updatedAt: updatedAt
+        )
+    }
+
+    static func fundTrade(
+        id: UUID = UUID(),
+        accountId: UUID? = UUID(),
+        updatedAt: Date = epoch
+    ) -> FundTradeSnapshot {
+        FundTradeSnapshot(
+            id: id, accountId: accountId,
+            isin: "ZZ0000000A00", tradeDate: epoch, side: .sell,
+            units: Decimal(string: "12.345678")!,
+            amountEur: Decimal(string: "2500.50")!,
+            switchGroupId: UUID(), importKey: "ZZ0000000A00|sell|1",
             createdAt: epoch, updatedAt: updatedAt
         )
     }

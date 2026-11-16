@@ -122,6 +122,8 @@ public enum RecordCoding {
         r["costBasisOpeningAt"] = s.costBasisOpeningAt as CKRecordValue?
         r["liveValueSource"] = s.liveValueSource as CKRecordValue?
         r["assetQuantity"] = s.assetQuantity.map(decimalString) as CKRecordValue?
+        r["brokerCashAnchorEur"] = s.brokerCashAnchorEur.map(decimalString) as CKRecordValue?
+        r["brokerCashAnchorAt"] = s.brokerCashAnchorAt as CKRecordValue?
         r["createdAt"] = s.createdAt as CKRecordValue
         r["clock"] = s.clock as CKRecordValue
         return r
@@ -153,6 +155,8 @@ public enum RecordCoding {
             costBasisOpeningAt: optionalDate(r, "costBasisOpeningAt"),
             liveValueSource: optionalString(r, "liveValueSource"),
             assetQuantity: try optionalDecimal(r, "assetQuantity"),
+            brokerCashAnchorEur: try optionalDecimal(r, "brokerCashAnchorEur"),
+            brokerCashAnchorAt: optionalDate(r, "brokerCashAnchorAt"),
             createdAt: try requireDate(r, "createdAt"),
             clock: try requireDate(r, "clock")
         )
@@ -423,6 +427,40 @@ public enum RecordCoding {
             marketValueEur: try requireDecimal(r, "marketValueEur"),
             cashValueEur: try optionalDecimal(r, "cashValueEur"),
             notes: optionalString(r, "notes"),
+            createdAt: try requireDate(r, "createdAt"),
+            updatedAt: try requireDate(r, "updatedAt")
+        )
+    }
+
+    // MARK: - FundTrade
+
+    public static func encode(_ s: FundTradeSnapshot) -> CKRecord {
+        let r = makeRecord(RecordType.fundTrade, id: s.id)
+        r["accountId"] = s.accountId?.uuidString as CKRecordValue?
+        r["isin"] = s.isin as CKRecordValue
+        r["tradeDate"] = s.tradeDate as CKRecordValue
+        r["side"] = s.side.rawValue as CKRecordValue
+        r["units"] = decimalString(s.units) as CKRecordValue
+        r["amountEur"] = decimalString(s.amountEur) as CKRecordValue
+        r["switchGroupId"] = s.switchGroupId?.uuidString as CKRecordValue?
+        r["importKey"] = s.importKey as CKRecordValue?
+        r["createdAt"] = s.createdAt as CKRecordValue
+        r["updatedAt"] = s.updatedAt as CKRecordValue
+        return r
+    }
+
+    public static func decodeFundTrade(_ r: CKRecord) throws -> FundTradeSnapshot {
+        try validate(r, RecordType.fundTrade)
+        return FundTradeSnapshot(
+            id: try uuid(r),
+            accountId: try optionalUUID(r, "accountId"),
+            isin: try requireString(r, "isin"),
+            tradeDate: try requireDate(r, "tradeDate"),
+            side: try requireEnum(r, "side", FundTradeSide.self),
+            units: try requireDecimal(r, "units"),
+            amountEur: try requireDecimal(r, "amountEur"),
+            switchGroupId: try optionalUUID(r, "switchGroupId"),
+            importKey: optionalString(r, "importKey"),
             createdAt: try requireDate(r, "createdAt"),
             updatedAt: try requireDate(r, "updatedAt")
         )

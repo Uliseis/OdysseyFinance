@@ -3,7 +3,7 @@ import XCTest
 
 final class CoreModelTests: XCTestCase {
     func testSchemaListsAllTypes() {
-        // 14 synced @Model types + SyncRecordMeta (local-only sync bookkeeping).
-        XCTAssertEqual(CoreModelSchema.allTypes.count, 15)
+        // 15 synced @Model types + SyncRecordMeta (local-only sync bookkeeping).
+        XCTAssertEqual(CoreModelSchema.allTypes.count, 16)
     }
 }
