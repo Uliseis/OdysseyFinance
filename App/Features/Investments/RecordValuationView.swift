@@ -365,15 +365,19 @@ struct RecordValuationView: View {
     // The anchor is pinned to a UTC day, and the day picked is the one meant: just after local
     // midnight the picker's instant still falls on the previous UTC day.
     private func utcDay(ofLocal date: Date) -> Date {
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = .gmt
-        return utc.date(from: Calendar.current.dateComponents([.year, .month, .day], from: date))!
+        Self.gregorian(.gmt).date(from: Self.gregorian(.current).dateComponents([.year, .month, .day], from: date))!
     }
 
     private func localDay(ofUTC day: Date) -> Date {
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = .gmt
-        return Calendar.current.date(from: utc.dateComponents([.year, .month, .day], from: day))!
+        Self.gregorian(.current).date(from: Self.gregorian(.gmt).dateComponents([.year, .month, .day], from: day))!
+    }
+
+    // Both sides Gregorian: Calendar.current can be Japanese or Buddhist, whose year means
+    // another one in the UTC calendar.
+    private static func gregorian(_ timeZone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar
     }
 
     // The picker is date-only; a valuation dated D must include every leg booked on D,
