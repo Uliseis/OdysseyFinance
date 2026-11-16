@@ -316,7 +316,15 @@ final class OdysseyMCPTests: XCTestCase {
         let ops = try XCTUnwrap(out["ops"] as? [[String: Any]])
         XCTAssertEqual(ops.compactMap { $0["status"] as? String }, ["applied", "applied", "applied"], "\(ops)")
         XCTAssertTrue((ops[0]["message"] as? String)?.contains("now 200 EUR") ?? false, "\(ops[0])")
+        XCTAssertEqual(ops[2]["message"] as? String, "The phone values it from fund prices (EODHD)")
         XCTAssertEqual(out["undoable"] as? Bool, true)
+
+        let unknown = try json(await catalog().call("propose_changes", [
+            "summary": "x", "ops": [["op": "setLiveSource", "accountId": account, "source": "coingecko"]]]))
+        let refused = try XCTUnwrap((unknown["ops"] as? [[String: Any]])?.first)
+        XCTAssertEqual(refused["status"] as? String, "failed")
+        XCTAssertTrue((refused["message"] as? String)?.contains(#""funds" (fund prices), "t212" (Trading 212) or null"#) ?? false,
+                      "\(refused)")
     }
 
     func test_whatThePhoneWillDo_followsItsSettingsAndPairing() async throws {
