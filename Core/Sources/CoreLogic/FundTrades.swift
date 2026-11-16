@@ -197,18 +197,24 @@ extension CoreLogic {
         public struct HeldUnitsGuess: Equatable, Sendable {
             public let isin: String
             // nil when the account has no saved trades for the fund.
-            public let units: Decimal?
+            public let savedUnits: Decimal?
+            // The export's done orders for the fund that aren't saved yet.
+            public let newOrders: Int
 
-            public init(isin: String, units: Decimal?) {
+            public init(isin: String, savedUnits: Decimal?, newOrders: Int) {
                 self.isin = isin
-                self.units = units
+                self.savedUnits = savedUnits
+                self.newOrders = newOrders
             }
+
+            // Only with nothing new: saved units plus the new orders read as buys would pass the
+            // import's units check even when one of them was a sale.
+            public var prefill: Decimal? { newOrders == 0 ? savedUnits : nil }
         }
 
-        // A starting point for the units held today that an import asks for, for every ISIN in
-        // the orders export, sorted. A fund with saved trades holds what they add up to plus the
-        // export's new done orders read as buys; for any other fund nothing says how much of it
-        // was sold, so there's no guess.
+        // For the units held today that an import asks for, for every ISIN in the orders export,
+        // sorted: what the fund's saved trades add up to and how many of the export's done
+        // orders are new. For a fund without saved trades nothing says how much was sold.
         @MainActor
         public static func guessHeldUnits(
             ordersCSV: String, for account: Account, in ctx: ModelContext
@@ -218,17 +224,17 @@ extension CoreLogic {
             let savedKeys = Set(saved.compactMap(\.importKey))
             let held = Dictionary(uniqueKeysWithValues:
                 Funds.positions(chronological(saved).map(trade(from:))).map { ($0.isin, $0.units) })
-            // The done orders in the order an import keys them; the readings are left unused.
-            var newUnits: [String: Decimal] = [:]
+            // The done orders in the order an import keys them. A key leaves out the side, so the
+            // readings are left unused.
+            var newOrders: [String: Int] = [:]
             for fund in MyInvestorOrdersCSV.infer(orders: parsed.rows, heldUnits: [:]).funds {
-                let asBuys = fund.orders.map {
+                let trades = fund.orders.map {
                     Funds.Trade(isin: fund.isin, date: $0.date, side: .buy, units: $0.units ?? 0, amountEur: $0.amountEur)
                 }
-                newUnits[fund.isin] = keyed(asBuys).filter { !savedKeys.contains($0.key) }
-                    .reduce(0) { $0 + $1.trade.units }
+                newOrders[fund.isin] = keyed(trades).filter { !savedKeys.contains($0.key) }.count
             }
             return Set(parsed.rows.map(\.isin)).sorted().map { isin in
-                HeldUnitsGuess(isin: isin, units: held[isin].map { $0 + (newUnits[isin] ?? 0) })
+                HeldUnitsGuess(isin: isin, savedUnits: held[isin], newOrders: newOrders[isin] ?? 0)
             }
         }
 
