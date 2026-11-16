@@ -270,6 +270,25 @@ final class BridgeFundOpsTests: XCTestCase {
         XCTAssertEqual(s.funds.costBasisOpeningAt, BridgeFixture.utcDay(2030, 1, 1))
     }
 
+    func test_anAmountWithoutADay_isRefused_forTheOpeningAndTheAnchor() throws {
+        let s = try store()
+        for op in [BridgeOp.setCostBasisOpening(accountId: s.funds.id, amountEur: 1000, at: nil),
+                   .setCostBasisOpening(accountId: s.funds.id, amountEur: 1500, at: nil),
+                   .setBrokerCashAnchor(accountId: s.funds.id, amountEur: 300, at: nil)] {
+            let outcome = run([op], s)
+            XCTAssertEqual(outcome.ops.first?.status, .failed, "\(op)")
+            XCTAssertEqual(outcome.ops.first?.message, "at is required when amountEur is set")
+        }
+        XCTAssertEqual(s.funds.costBasisOpeningEur, 1000)
+        XCTAssertEqual(s.funds.costBasisOpeningAt, BridgeFixture.utcDay(2030, 1, 1))
+        XCTAssertNil(s.funds.brokerCashAnchorEur)
+
+        // Clearing needs no day.
+        XCTAssertEqual(run([.setCostBasisOpening(accountId: s.funds.id, amountEur: nil, at: nil)], s).ops.first?.status, .applied)
+        XCTAssertNil(s.funds.costBasisOpeningEur)
+        XCTAssertNil(s.funds.costBasisOpeningAt)
+    }
+
     func test_setLiveSource_switchesTheSource_andRefusesWhatItCantUndo() throws {
         let s = try store()
         let outcome = run([.setLiveSource(accountId: s.funds.id, source: " funds ")], s)

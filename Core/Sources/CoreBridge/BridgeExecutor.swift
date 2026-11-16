@@ -441,6 +441,7 @@ public enum BridgeExecutor {
 
         case .setBrokerCashAnchor(let accountId, let amount, let at):
             let account = try investmentAccount(accountId, in: ctx)
+            try requireDay(amount, at)
             let was = (amount: account.brokerCashAnchorEur, at: account.brokerCashAnchorAt)
             let day = amount == nil ? nil : at.map(utcDay)
             guard was.amount != amount || was.at != day else {
@@ -463,6 +464,7 @@ public enum BridgeExecutor {
 
         case .setCostBasisOpening(let accountId, let amount, let at):
             let account = try investmentAccount(accountId, in: ctx)
+            try requireDay(amount, at)
             let was = (amount: account.costBasisOpeningEur, at: account.costBasisOpeningAt)
             let day = amount == nil ? nil : at.map(utcDay)
             guard was.amount != amount || was.at != day else {
@@ -594,6 +596,12 @@ public enum BridgeExecutor {
             throw BridgeExecutorError.invalid("\(account.displayName) isn't an investment account")
         }
         return account
+    }
+
+    // Without its day an opening sits before every transfer, so they all add to it again, and
+    // an anchor tracks nothing.
+    private static func requireDay(_ amount: Decimal?, _ at: Date?) throws {
+        if amount != nil && at == nil { throw BridgeExecutorError.invalid("at is required when amountEur is set") }
     }
 
     // CoreLogic pins anchors to the UTC day; comparing the same way tells a replay from a change.
