@@ -27,6 +27,12 @@ public struct CategoryRestore: Codable, Sendable, Equatable {
     public var source: CategorySource
 }
 
+public struct FundTradeRestore: Codable, Sendable, Equatable {
+    public var id: UUID
+    public var amountEur: Decimal
+    public var switchGroupId: UUID?
+}
+
 // Categories are named, as the policy and Claude name them; records are referenced by id.
 public enum BridgeOp: Sendable, Equatable {
     case categorize(txIds: [UUID], category: String?)
@@ -57,10 +63,17 @@ public enum BridgeOp: Sendable, Equatable {
     case mirrorTransfer(sourceTxId: UUID, targetAccountId: UUID)
     case createSharedGroupFromCredit(label: String, creditTxId: UUID, expenseTxIds: [UUID])
     case archiveAccount(accountId: UUID, archived: Bool)
+    // Units held today per ISIN, as the broker shows them: the export doesn't say which orders sold.
+    case importFundOrders(accountId: UUID, ordersCsv: String, movementsCsv: String, heldUnits: [String: Decimal])
+    // A nil amount clears the anchor or opening.
+    case setBrokerCashAnchor(accountId: UUID, amountEur: Decimal?, at: Date?)
+    case setCostBasisOpening(accountId: UUID, amountEur: Decimal?, at: Date?)
+    case setLiveSource(accountId: UUID, source: String?)
     // Only the phone builds these, to undo an auto-applied batch. Never accepted from the inbox.
     case restoreCategories([CategoryRestore])
     case deleteCategory(id: UUID)
     case deleteValuation(id: UUID)
+    case restoreFundTrades(deleteIds: [UUID], restores: [FundTradeRestore])
 
     public var name: String {
         switch self {
@@ -88,9 +101,14 @@ public enum BridgeOp: Sendable, Equatable {
         case .mirrorTransfer: "mirrorTransfer"
         case .createSharedGroupFromCredit: "createSharedGroupFromCredit"
         case .archiveAccount: "archiveAccount"
+        case .importFundOrders: "importFundOrders"
+        case .setBrokerCashAnchor: "setBrokerCashAnchor"
+        case .setCostBasisOpening: "setCostBasisOpening"
+        case .setLiveSource: "setLiveSource"
         case .restoreCategories: "restoreCategories"
         case .deleteCategory: "deleteCategory"
         case .deleteValuation: "deleteValuation"
+        case .restoreFundTrades: "restoreFundTrades"
         }
     }
 
@@ -99,14 +117,15 @@ public enum BridgeOp: Sendable, Equatable {
     public var isUndoable: Bool {
         switch self {
         case .categorize, .createCategory, .createRule, .applyRules, .recordValuation, .requestBankSync, .requestReconnect,
-             .createTransaction, .mirrorTransfer, .archiveAccount: true
+             .createTransaction, .mirrorTransfer, .archiveAccount, .importFundOrders, .setBrokerCashAnchor,
+             .setCostBasisOpening, .setLiveSource: true
         default: false
         }
     }
 
     public var isUndoOnly: Bool {
         switch self {
-        case .restoreCategories, .deleteCategory, .deleteValuation: true
+        case .restoreCategories, .deleteCategory, .deleteValuation, .restoreFundTrades: true
         default: false
         }
     }
@@ -139,6 +158,7 @@ extension BridgeOp: Codable {
         case csv, feedAccountId, manualAccountId, debitTxId, targetAccountId, sourceAccountId, direction, routeId
         case enabled, connectionIds, connectionId
         case amount, bookedAt, counterparty, sourceTxId, creditTxId, expenseTxIds, archived
+        case ordersCsv, movementsCsv, heldUnits, amountEur, at, source, deleteIds
         case descriptionText = "description"
     }
 
@@ -235,12 +255,31 @@ extension BridgeOp: Codable {
         case "archiveAccount":
             self = .archiveAccount(accountId: try c.decode(UUID.self, forKey: .accountId),
                                    archived: try c.decodeIfPresent(Bool.self, forKey: .archived) ?? true)
+        case "importFundOrders":
+            self = .importFundOrders(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                     ordersCsv: try c.decode(String.self, forKey: .ordersCsv),
+                                     movementsCsv: try c.decode(String.self, forKey: .movementsCsv),
+                                     heldUnits: try c.decode([String: Decimal].self, forKey: .heldUnits))
+        case "setBrokerCashAnchor":
+            self = .setBrokerCashAnchor(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                        amountEur: try c.decodeIfPresent(Decimal.self, forKey: .amountEur),
+                                        at: try c.decodeIfPresent(Date.self, forKey: .at))
+        case "setCostBasisOpening":
+            self = .setCostBasisOpening(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                        amountEur: try c.decodeIfPresent(Decimal.self, forKey: .amountEur),
+                                        at: try c.decodeIfPresent(Date.self, forKey: .at))
+        case "setLiveSource":
+            self = .setLiveSource(accountId: try c.decode(UUID.self, forKey: .accountId),
+                                  source: try c.decodeIfPresent(String.self, forKey: .source))
         case "restoreCategories":
             self = .restoreCategories(try c.decode([CategoryRestore].self, forKey: .restores))
         case "deleteCategory":
             self = .deleteCategory(id: try c.decode(UUID.self, forKey: .id))
         case "deleteValuation":
             self = .deleteValuation(id: try c.decode(UUID.self, forKey: .id))
+        case "restoreFundTrades":
+            self = .restoreFundTrades(deleteIds: try c.decode([UUID].self, forKey: .deleteIds),
+                                      restores: try c.decode([FundTradeRestore].self, forKey: .restores))
         default:
             throw DecodingError.dataCorruptedError(forKey: .op, in: c, debugDescription: "Unknown op \(op)")
         }
@@ -339,10 +378,25 @@ extension BridgeOp: Codable {
         case .archiveAccount(let accountId, let archived):
             try c.encode(accountId, forKey: .accountId)
             try c.encode(archived, forKey: .archived)
+        case .importFundOrders(let accountId, let orders, let movements, let held):
+            try c.encode(accountId, forKey: .accountId)
+            try c.encode(orders, forKey: .ordersCsv)
+            try c.encode(movements, forKey: .movementsCsv)
+            try c.encode(held, forKey: .heldUnits)
+        case .setBrokerCashAnchor(let accountId, let amount, let at), .setCostBasisOpening(let accountId, let amount, let at):
+            try c.encode(accountId, forKey: .accountId)
+            try c.encodeIfPresent(amount, forKey: .amountEur)
+            try c.encodeIfPresent(at, forKey: .at)
+        case .setLiveSource(let accountId, let source):
+            try c.encode(accountId, forKey: .accountId)
+            try c.encodeIfPresent(source, forKey: .source)
         case .restoreCategories(let restores):
             try c.encode(restores, forKey: .restores)
         case .deleteCategory(let id), .deleteValuation(let id):
             try c.encode(id, forKey: .id)
+        case .restoreFundTrades(let deleteIds, let restores):
+            try c.encode(deleteIds, forKey: .deleteIds)
+            try c.encode(restores, forKey: .restores)
         }
     }
 }

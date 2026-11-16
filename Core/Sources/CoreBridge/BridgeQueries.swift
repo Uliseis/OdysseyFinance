@@ -458,7 +458,7 @@ public enum BridgeError: Error, CustomStringConvertible {
 
 
 // Valuations and FX conversions carry more than two decimals; answers are in cents.
-private func toCents(_ value: Decimal) -> Decimal {
+func toCents(_ value: Decimal) -> Decimal {
     var input = value
     var rounded = Decimal()
     NSDecimalRound(&rounded, &input, 2, .plain)
