@@ -16,6 +16,7 @@ public struct MarketKeychain: Sendable {
 
     private static let t212Key = "trading212-api-key"
     private static let t212Secret = "trading212-api-secret"
+    private static let eodhdKey = "eodhd-api-key"
 
     public func storeTrading212(key: String, secret: String) throws {
         try store(Self.t212Key, key)
@@ -29,15 +30,32 @@ public struct MarketKeychain: Sendable {
     public var hasTrading212: Bool { (try? loadTrading212()) != nil }
 
     public func removeTrading212() {
-        for account in [Self.t212Key, Self.t212Secret] {
-            let query: [CFString: Any] = [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: service,
-                kSecAttrAccount: account,
-                kSecAttrSynchronizable: kSecAttrSynchronizableAny as Any,
-            ]
-            SecItemDelete(query as CFDictionary)
-        }
+        remove(Self.t212Key)
+        remove(Self.t212Secret)
+    }
+
+    public func storeEODHD(apiKey: String) throws {
+        try store(Self.eodhdKey, apiKey)
+    }
+
+    public func loadEODHD() throws -> String {
+        try load(Self.eodhdKey)
+    }
+
+    public var hasEODHD: Bool { (try? loadEODHD()) != nil }
+
+    public func removeEODHD() {
+        remove(Self.eodhdKey)
+    }
+
+    private func remove(_ account: String) {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account,
+            kSecAttrSynchronizable: kSecAttrSynchronizableAny as Any,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 
     private func store(_ account: String, _ value: String) throws {
