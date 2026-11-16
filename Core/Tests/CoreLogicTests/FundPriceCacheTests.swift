@@ -58,7 +58,8 @@ final class FundPriceCacheTests: XCTestCase {
         let day = Date(timeIntervalSince1970: 21_990 * 86_400)
         cache.funds["ZZ0000000A00"] = .init(
             name: "Example Fund", currency: "EUR", price: Decimal(string: "5.1234"), priceDay: day,
-            fetchedDay: day, previousPrice: Decimal(string: "2.0468"))
+            fetchedDay: day, previousPrice: Decimal(string: "2.0468"),
+            pendingPrice: Decimal(string: "7.4321"), pendingDay: day)
         cache.requestDay = day
         cache.requestCount = 3
         try file.save(cache)

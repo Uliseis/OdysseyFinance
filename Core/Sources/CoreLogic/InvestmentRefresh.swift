@@ -197,10 +197,13 @@ extension CoreLogic {
                     let entry = cache.funds[position.isin]
                     let label = entry?.name ?? position.isin
                     let why = refresh.notRefreshed[position.isin].map { " (\($0))" } ?? ""
-                    if let jump = refresh.jumps[position.isin] {
-                        problems.append("\(label): \(jump)")
-                    } else if let entry, entry.currency != "EUR" {
+                    if let entry, entry.currency != "EUR" {
                         problems.append("\(label): priced in \(entry.currency), not EUR")
+                    } else if let entry, let pending = entry.pendingPrice, let pendingDay = entry.pendingDay {
+                        let from = pendingDay == entry.priceDay ? entry.previousPrice : entry.price
+                        problems.append("\(label): new price awaiting confirmation (\(pending) for \(isoDay(pendingDay)) "
+                            + "is more than \(fundJumpLimit * 100)% from \(from.map { "\($0)" } ?? "the one before"); "
+                            + "a later day's price confirms or replaces it)")
                     } else if let price = entry?.price, let priceDay = entry?.priceDay {
                         if businessDays(after: priceDay, through: today) > fundPriceMaxBusinessDays {
                             problems.append("\(label): its latest price is from \(isoDay(priceDay)), "
@@ -229,8 +232,6 @@ extension CoreLogic {
             var cache: FundPriceCache
             // By ISIN: why a fund's cached price, if it has one, wasn't refreshed.
             var notRefreshed: [String: String] = [:]
-            // By ISIN: a new price the jump guard refused.
-            var jumps: [String: String] = [:]
             var saveFailure: String?
         }
 
@@ -287,7 +288,7 @@ extension CoreLogic {
                 do {
                     let quote = try await source.latest(isin: isin, currency: entry.currency)
                     entry.fetchedDay = today
-                    result.jumps[isin] = accept(quote, into: &entry)
+                    accept(quote, into: &entry)
                     result.cache.funds[isin] = entry
                 } catch {
                     if error as? FundPriceError == .rateLimited { result.cache.requestCount = fundRequestsPerDay }
@@ -297,21 +298,37 @@ extension CoreLogic {
             return result
         }
 
-        // Takes the quote into the entry, or says why not. A quote older than the cached price
-        // is ignored. The jump is measured against a price of an earlier day, so a NAV
-        // re-published for the cached day is checked against the day before it.
-        private static func accept(_ quote: FundQuote, into entry: inout FundPriceCache.Entry) -> String? {
-            if let day = entry.priceDay, quote.day < day { return nil }
-            let sameDay = entry.priceDay == quote.day
-            if let reference = sameDay ? entry.previousPrice : entry.price, reference > 0,
-               abs(quote.price - reference) / reference > fundJumpLimit {
-                return "its new price \(quote.price) for \(isoDay(quote.day)) is more than "
-                    + "\(fundJumpLimit * 100)% from \(reference); kept the cached price"
+        // Takes the quote into the entry, or holds it as pending when it jumps. A quote older
+        // than the cached or pending price is ignored. The jump is measured against a price of
+        // an earlier day, so a NAV re-published for the cached day is checked against the day
+        // before it.
+        private static func accept(_ quote: FundQuote, into entry: inout FundPriceCache.Entry) {
+            if let newest = [entry.priceDay, entry.pendingDay].compactMap({ $0 }).max(), quote.day < newest { return }
+            // A cached price too old to value with says nothing about how far the market has
+            // moved since, so it's no reference.
+            let stale = entry.priceDay.map {
+                businessDays(after: $0, through: quote.day) > fundPriceMaxBusinessDays
+            } == true
+            var previous = entry.priceDay == quote.day ? entry.previousPrice : stale ? nil : entry.price
+            if let reference = previous, isJump(quote.price, from: reference) {
+                // Two different days agreeing on the new level is a real move, not a bad print.
+                guard let pending = entry.pendingPrice, let pendingDay = entry.pendingDay,
+                      quote.day > pendingDay, !isJump(quote.price, from: pending) else {
+                    entry.pendingPrice = quote.price
+                    entry.pendingDay = quote.day
+                    return
+                }
+                previous = pending
             }
-            if !sameDay { entry.previousPrice = entry.price }
+            entry.previousPrice = previous
             entry.price = quote.price
             entry.priceDay = quote.day
-            return nil
+            entry.pendingPrice = nil
+            entry.pendingDay = nil
+        }
+
+        private static func isJump(_ price: Decimal, from reference: Decimal) -> Bool {
+            reference > 0 && abs(price - reference) / reference > fundJumpLimit
         }
 
         // Monday to Friday, UTC, after `day` up to and including `end`'s day.

@@ -230,30 +230,132 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(R.businessDays(after: day(13), through: now), 0)
     }
 
-    func testAJumpOverFifteenPercentIsRefusedAndTheCacheKeepsItsPrice() async throws {
-        let ctx = try S.makeContext()
-        let acc = try makeAccount(ctx)
-        let oldA = Entry(name: "Example Fund A", currency: "EUR", price: d("7.4321"), priceDay: day(11),
-                         fetchedDay: day(11), previousPrice: d("7.4"))
+    private let oldA = Entry(name: "Example Fund A", currency: "EUR", price: Decimal(string: "7.4321"),
+                             priceDay: nil, fetchedDay: nil, previousPrice: Decimal(string: "7.4"))
+
+    // A priced on Monday the 11th; Tuesday's NAV is 8.6, a 16% jump. B moves 12%.
+    private func cacheBeforeAJump() {
+        var a0 = oldA
+        a0.priceDay = day(11)
+        a0.fetchedDay = day(11)
         cache.cache.funds = [
-            a: oldA,
+            a: a0,
             b: Entry(name: "Example Fund B", currency: "EUR", price: d("2.0468"), priceDay: day(11), fetchedDay: day(11)),
         ]
         source.quotes[a] = FundQuote(isin: a, day: day(12), price: d("8.6"), currency: "EUR")
         source.quotes[b] = FundQuote(isin: b, day: day(12), price: d("2.3"), currency: "EUR")
+    }
+
+    func testAJumpOverFifteenPercentIsRefusedAndHeldUntilConfirmed() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cacheBeforeAJump()
 
         let outcome = await run(ctx)
 
         XCTAssertTrue(outcome.updated.isEmpty)
         XCTAssertEqual(outcome.failures.count, 1)
-        XCTAssertTrue(outcome.failures[0].contains("Example Fund A"), outcome.failures[0])
+        XCTAssertTrue(outcome.failures[0].contains("Example Fund A: new price awaiting confirmation"), outcome.failures[0])
         XCTAssertTrue(outcome.failures[0].contains("15%"), outcome.failures[0])
         XCTAssertEqual(try valuations(acc, ctx).count, 0)
         let a2 = try XCTUnwrap(cache.cache.funds[a])
         XCTAssertEqual([a2.price, a2.previousPrice], [oldA.price, oldA.previousPrice])
-        XCTAssertEqual(a2.priceDay, oldA.priceDay)
+        XCTAssertEqual(a2.priceDay, day(11))
+        XCTAssertEqual(a2.pendingPrice, d("8.6"))
+        XCTAssertEqual(a2.pendingDay, day(12))
         XCTAssertEqual(cache.cache.funds[b]?.price, d("2.3"), "a 12% move is a market move")
         XCTAssertEqual(cache.cache.funds[b]?.previousPrice, d("2.0468"))
+        XCTAssertNil(cache.cache.funds[b]?.pendingPrice)
+    }
+
+    func testARefusedJumpRefusesEveryRunThatDay() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cacheBeforeAJump()
+
+        let first = await run(ctx)
+        let second = await run(ctx, at: now.addingTimeInterval(8 * 3600))
+
+        for outcome in [first, second] {
+            XCTAssertTrue(outcome.updated.isEmpty)
+            XCTAssertEqual(outcome.failures.count, 1)
+            XCTAssertTrue(outcome.failures.first?.contains("Example Fund A: new price awaiting confirmation") == true,
+                          "\(outcome.failures)")
+        }
+        XCTAssertEqual(source.latests, [a, b], "the second run fetches nothing")
+        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+    }
+
+    func testTheSameRefusedNavFetchedAgainIsNoConfirmation() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cacheBeforeAJump()
+        _ = await run(ctx)
+
+        let outcome = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(source.latests, [a, b, a, b])
+        XCTAssertTrue(outcome.updated.isEmpty)
+        XCTAssertTrue(outcome.failures.first?.contains("awaiting confirmation") == true, "\(outcome.failures)")
+        XCTAssertEqual(cache.cache.funds[a]?.pendingDay, day(12))
+        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+    }
+
+    func testALaterDayAgreeingWithARefusedJumpConfirmsIt() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cacheBeforeAJump()
+        _ = await run(ctx)
+        source.quotes[a] = FundQuote(isin: a, day: day(13), price: d("8.7"), currency: "EUR")
+
+        let outcome = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("121.7"), "10 × 8.7 + 4 × 2.3 + 25.50")
+        let a2 = try XCTUnwrap(cache.cache.funds[a])
+        XCTAssertEqual(a2.price, d("8.7"))
+        XCTAssertEqual(a2.priceDay, day(13))
+        XCTAssertEqual(a2.previousPrice, d("8.6"), "the confirmed price is the day before")
+        XCTAssertNil(a2.pendingPrice)
+        XCTAssertNil(a2.pendingDay)
+    }
+
+    func testALaterDayBackNearTheOldPriceClearsARefusedJump() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cacheBeforeAJump()
+        _ = await run(ctx)
+        source.quotes[a] = FundQuote(isin: a, day: day(13), price: d("7.45"), currency: "EUR")
+
+        let outcome = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
+        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("109.2"), "10 × 7.45 + 4 × 2.3 + 25.50")
+        let a2 = try XCTUnwrap(cache.cache.funds[a])
+        XCTAssertEqual(a2.price, d("7.45"))
+        XCTAssertEqual(a2.previousPrice, d("7.4321"))
+        XCTAssertNil(a2.pendingPrice)
+        XCTAssertNil(a2.pendingDay)
+    }
+
+    // A price older than a usable one says nothing about how far the market has moved since.
+    func testAJumpFromAStaleCachedPriceIsAccepted() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        cache.cache.funds = [
+            a: Entry(name: "Example Fund A", currency: "EUR", price: d("6"), priceDay: day(1),
+                     fetchedDay: day(1), previousPrice: d("5.9")),
+            b: Entry(name: "Example Fund B", currency: "EUR", price: d("2.0468"), priceDay: day(11), fetchedDay: day(11)),
+        ]
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
+        let a2 = try XCTUnwrap(cache.cache.funds[a])
+        XCTAssertEqual(a2.price, d("7.4321"), "a 24% move over seven business days")
+        XCTAssertNil(a2.previousPrice, "the stale price isn't kept as a reference")
+        XCTAssertNil(a2.pendingPrice)
     }
 
     func testANavRepublishedForTheSameDayIsCheckedAgainstTheDayBefore() async throws {
