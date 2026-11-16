@@ -14,10 +14,15 @@ extension CoreLogic {
             // The price before `price`, from an earlier day: what a NAV re-published for
             // priceDay is checked against.
             public var previousPrice: Decimal?
+            // A new price the jump guard refused, held until a later day's price confirms or
+            // replaces it. While it's held, accounts with the fund aren't valued.
+            public var pendingPrice: Decimal?
+            public var pendingDay: Date?
 
             public init(
                 name: String, currency: String, price: Decimal? = nil, priceDay: Date? = nil,
-                fetchedDay: Date? = nil, previousPrice: Decimal? = nil
+                fetchedDay: Date? = nil, previousPrice: Decimal? = nil,
+                pendingPrice: Decimal? = nil, pendingDay: Date? = nil
             ) {
                 self.name = name
                 self.currency = currency
@@ -25,6 +30,8 @@ extension CoreLogic {
                 self.priceDay = priceDay
                 self.fetchedDay = fetchedDay
                 self.previousPrice = previousPrice
+                self.pendingPrice = pendingPrice
+                self.pendingDay = pendingDay
             }
         }
 
