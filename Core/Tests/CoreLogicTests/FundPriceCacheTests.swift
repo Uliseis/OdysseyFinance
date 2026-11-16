@@ -17,11 +17,38 @@ final class FundPriceCacheTests: XCTestCase {
         XCTAssertEqual(file.load(), CoreLogic.FundPriceCache())
     }
 
-    func testAnUnreadableFileIsAnEmptyCache() throws {
+    // Not an empty cache: that would reset today's request count.
+    func testAnUnreadableFileLoadsAsNothing() throws {
         let url = dir.appending(path: "broken.json")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: url)
-        XCTAssertEqual(FundPriceCacheFile(url: url).load(), CoreLogic.FundPriceCache())
+        XCTAssertNil(FundPriceCacheFile(url: url).load())
+    }
+
+    func testAFundThatCantBeReadOrAnUnknownFieldDoesntWipeTheCache() throws {
+        let url = dir.appending(path: "fund-prices.json")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("""
+        {"requestDay": 0, "requestCount": 3, "futureField": true,
+         "funds": {
+           "ZZ0000000A00": {"name": "Example Fund", "currency": "EUR", "price": 5.1234, "priceDay": 0, "futureField": 1},
+           "ZZ0000000B09": {"name": "Example Fund Without Currency"}
+         }}
+        """.utf8).write(to: url)
+        var expected = CoreLogic.FundPriceCache()
+        expected.funds["ZZ0000000A00"] = .init(
+            name: "Example Fund", currency: "EUR", price: Decimal(string: "5.1234"),
+            priceDay: Date(timeIntervalSinceReferenceDate: 0))
+        expected.requestDay = Date(timeIntervalSinceReferenceDate: 0)
+        expected.requestCount = 3
+        XCTAssertEqual(FundPriceCacheFile(url: url).load(), expected)
+    }
+
+    func testAFileWithoutARequestCountIsUnreadable() throws {
+        let url = dir.appending(path: "fund-prices.json")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(#"{"requestDay": 0, "funds": {}}"#.utf8).write(to: url)
+        XCTAssertNil(FundPriceCacheFile(url: url).load())
     }
 
     func testRoundTripKeepsPricesExact() throws {
@@ -35,7 +62,7 @@ final class FundPriceCacheTests: XCTestCase {
         cache.requestDay = day
         cache.requestCount = 3
         try file.save(cache)
-        let loaded = file.load()
+        let loaded = try XCTUnwrap(file.load())
         XCTAssertEqual(loaded, cache)
         XCTAssertEqual(loaded.funds["ZZ0000000A00"]?.price?.description, "5.1234")
     }

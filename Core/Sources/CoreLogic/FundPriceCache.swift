@@ -34,11 +34,27 @@ extension CoreLogic {
         public var requestCount = 0
 
         public init() {}
+
+        // A fund that can't be read is dropped and looked up again; the rest stay. The request
+        // count has no fallback: without it the file is unreadable as a whole.
+        public init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            funds = try c.decodeIfPresent([String: LossyEntry].self, forKey: .funds)?
+                .compactMapValues(\.entry) ?? [:]
+            requestDay = try c.decodeIfPresent(Date.self, forKey: .requestDay)
+            requestCount = try c.decode(Int.self, forKey: .requestCount)
+        }
+
+        private struct LossyEntry: Decodable {
+            let entry: Entry?
+            init(from decoder: any Decoder) throws { entry = try? Entry(from: decoder) }
+        }
     }
 }
 
 public protocol FundPriceCacheStore {
-    func load() -> CoreLogic.FundPriceCache
+    // nil when there is a cache that can't be read, as opposed to none at all.
+    func load() -> CoreLogic.FundPriceCache?
     func save(_ cache: CoreLogic.FundPriceCache) throws
 }
 
@@ -49,12 +65,16 @@ public struct FundPriceCacheFile: FundPriceCacheStore {
         self.url = url
     }
 
-    // A missing or unreadable file is an empty cache: everything in it can be fetched again.
-    public func load() -> CoreLogic.FundPriceCache {
-        guard let data = try? Data(contentsOf: url),
-              let cache = try? JSONDecoder().decode(CoreLogic.FundPriceCache.self, from: data)
-        else { return CoreLogic.FundPriceCache() }
-        return cache
+    public func load() -> CoreLogic.FundPriceCache? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            return CoreLogic.FundPriceCache()
+        } catch {
+            return nil
+        }
+        return try? JSONDecoder().decode(CoreLogic.FundPriceCache.self, from: data)
     }
 
     public func save(_ cache: CoreLogic.FundPriceCache) throws {

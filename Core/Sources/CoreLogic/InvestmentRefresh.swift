@@ -179,7 +179,14 @@ extension CoreLogic {
             }
 
             let today = Funds.dayStart(now)
-            var cache = store.load()
+            // A cache that can't be read can't say how many requests today already made: assume
+            // all of them. Saving it below replaces the unreadable file.
+            var cache = store.load() ?? {
+                var spent = FundPriceCache()
+                spent.requestDay = today
+                spent.requestCount = fundRequestsPerDay
+                return spent
+            }()
             let refresh = await refreshPrices(
                 Set(ready.flatMap { $0.held.map(\.isin) }).sorted(),
                 cache: &cache, source: makeSource(apiKey), today: today)
