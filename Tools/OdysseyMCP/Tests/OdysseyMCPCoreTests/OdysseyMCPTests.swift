@@ -229,6 +229,24 @@ final class OdysseyMCPTests: XCTestCase {
         XCTAssertTrue(errorText(missing).contains("Can't read the statement"))
     }
 
+    func test_aFileOverTwoMegabytes_isRefusedWithoutBeingEmbedded() async throws {
+        try writeSnapshot()
+        let c = catalog()
+        let accountId = Value.string(UUID().uuidString)
+        let atCap = dir.appending(path: "at-cap.csv"), overCap = dir.appending(path: "over-cap.csv")
+        try Data(repeating: 0x41, count: ToolCatalog.maxFileBytes).write(to: atCap)
+        try Data(repeating: 0x41, count: ToolCatalog.maxFileBytes + 1).write(to: overCap)
+
+        let tooBig = await c.call("propose_changes", [
+            "summary": "x", "ops": [["op": "importStatement", "accountId": accountId, "csvPath": .string(overCap.path)]]])
+        XCTAssertEqual(errorText(tooBig), "The statement at \(overCap.path) is over 2 MB: check it's the right file, or export a shorter period")
+
+        // Read and embedded; the preview then fails on the unknown account.
+        let fits = try json(await c.call("propose_changes", [
+            "summary": "x", "ops": [["op": "importStatement", "accountId": accountId, "csvPath": .string(atCap.path)]]]))
+        XCTAssertEqual((fits["ops"] as? [[String: Any]])?.first?["status"] as? String, "failed")
+    }
+
     func test_fundPositions_perFundWithSwitchesAndTheBrokerCash() async throws {
         let ids = try writeFundSnapshot()
         let out = try json(await catalog().call("fund_positions", ["accountId": .string(ids.funds.uuidString)]))
