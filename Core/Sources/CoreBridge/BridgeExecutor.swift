@@ -687,8 +687,7 @@ public enum BridgeExecutor {
         (p.units > 0 ? "\(p.units) units · cost \(toCents(p.costEur)) EUR" : "sold") + " · realised \(toCents(p.realisedGainEur)) EUR"
     }
 
-    // Becomes CoreLogic.InvestmentRefresh.fundsSource once the fund-prices change is merged.
-    private static let fundsSource = "funds"
+    private static let fundsSource = CoreLogic.InvestmentRefresh.fundsSource
 
     private static func sourceText(_ source: String?) -> String {
         switch source {
