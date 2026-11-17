@@ -392,6 +392,109 @@ final class EBSyncTests: XCTestCase {
         XCTAssertEqual(results[0].connectionId, active.id)
     }
 
+    // Each bank answers after its own delay, with one account and one new row per connection.
+    private struct PacedAPI: EBSyncAPI {
+        var delays: [String: Duration] = [:]
+        var sessions: [String: SessionResponse] = [:]
+        var failing: Set<String> = []
+        var details: [String: AccountDetails] = [:]
+        var pages: [String: TransactionsResponse] = [:]
+
+        func getSession(_ sessionId: String) async throws -> SessionResponse {
+            try await Task.sleep(for: delays[sessionId] ?? .zero)
+            if failing.contains(sessionId) { throw EnableBankingError(status: 500, body: "down") }
+            return sessions[sessionId]!
+        }
+        func getAccountDetails(_ accountUid: String) async throws -> AccountDetails { details[accountUid]! }
+        func getAccountBalances(_ accountUid: String) async throws -> BalancesResponse {
+            decode(#"{"balances": []}"#)
+        }
+        func getAccountTransactions(_ accountUid: String, query: EBTransactionQuery) async throws -> TransactionsResponse {
+            pages[accountUid]!
+        }
+    }
+
+    private func pacedBanks(_ ctx: ModelContext, delays: [Duration], failing: Set<String> = []) throws -> ([Connection], PacedAPI) {
+        var api = PacedAPI(failing: failing)
+        var connections: [Connection] = []
+        for (i, delay) in delays.enumerated() {
+            let uid = UUID().uuidString
+            let conn = Connection(connector: .enablebanking, institutionName: "Bank \(i)",
+                                  sessionId: "sess-\(i)", status: .active)
+            ctx.insert(conn)
+            ctx.insert(Account(connection: conn, externalId: uid, type: .bank, institution: "Bank \(i)",
+                               name: "Main", currency: "EUR", iban: "ES00\(i)"))
+            api.delays["sess-\(i)"] = delay
+            api.sessions["sess-\(i)"] = makeSession(uids: [uid])
+            api.details[uid] = details(iban: "ES00\(i)")
+            api.pages[uid] = txPage([("r\(i)", "10.00", "CRDT")])
+            connections.append(conn)
+        }
+        try ctx.save()
+        return (connections, api)
+    }
+
+    // A run waited for each bank in turn, so it took as long as all of them together, past the
+    // 30 seconds a Shortcuts action gets. Only the waits overlap: the results and run records
+    // read as they did.
+    func testSyncAllWaitsForTheBanksAtOnce() async throws {
+        let ctx = try S.makeContext()
+        let (connections, api) = try pacedBanks(ctx, delays: [.milliseconds(600), .milliseconds(200), .milliseconds(400)])
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let results = await Sync.syncAll(api: api, in: ctx)
+        let elapsed = clock.now - start
+
+        XCTAssertLessThan(elapsed, .milliseconds(1000), "about the slowest bank, not the three in turn")
+        XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(600))
+        XCTAssertEqual(results.map(\.connectionId), connections.map(\.id), "in the order the connections were made, not the order they finished")
+        XCTAssertEqual(results.map(\.transactionsInserted), [1, 1, 1])
+        XCTAssertEqual(results.map(\.errors), [[], [], []])
+        XCTAssertTrue(connections.allSatisfy { $0.status == .active && $0.lastSyncAt != nil })
+        let runs = try ctx.fetch(FetchDescriptor<SyncRun>())
+        XCTAssertEqual(runs.count, 3)
+        XCTAssertEqual(Set(runs.compactMap { $0.connection?.id }), Set(connections.map(\.id)))
+        XCTAssertTrue(runs.allSatisfy { $0.status == .ok && $0.insertedTransactions == 1 && $0.finishedAt != nil })
+        XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<Transaction>()), 3)
+    }
+
+    func testABankFailingAlongsideTheOthersIsRecordedAsBefore() async throws {
+        let ctx = try S.makeContext()
+        let (connections, api) = try pacedBanks(ctx, delays: [.milliseconds(100), .zero, .milliseconds(50)], failing: ["sess-1"])
+
+        let results = await Sync.syncAll(api: api, in: ctx)
+
+        XCTAssertEqual(results.map(\.connectionId), connections.map(\.id))
+        XCTAssertEqual(results.map(\.errors), [[], ["500 down"], []])
+        XCTAssertEqual(connections.map(\.status), [.active, .error, .active])
+        XCTAssertEqual(connections[1].lastError, "500 down")
+        XCTAssertNil(connections[1].lastSyncAt)
+        let failedId = connections[1].id
+        let failedRun = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SyncRun>()).first { $0.connection?.id == failedId })
+        XCTAssertEqual(failedRun.status, .error)
+        XCTAssertEqual(failedRun.error, "500 down")
+    }
+
+    // A bank's own connections still run in turn: one that takes over another's account revokes
+    // it, and a revoked connection must not then sync and take the account back.
+    func testConnectionsToTheSameBankRunInTurn() async throws {
+        let ctx = try S.makeContext()
+        let first = makeConnection(ctx)
+        let second = makeConnection(ctx, sessionId: "second-sess")
+        let account = makeLinkedAccount(ctx, connection: second, uid: UUID().uuidString)
+
+        let api = StubAPI(session: makeSession())
+        api.details[Self.uid] = details()  // same ES1234 iban as the second connection's account
+
+        let results = await Sync.syncAll(api: api, in: ctx)
+
+        XCTAssertEqual(results.map(\.connectionId), [first.id], "the connection it revoked is skipped")
+        XCTAssertEqual(account.connection?.id, first.id)
+        XCTAssertEqual(second.status, .revoked)
+        XCTAssertEqual(first.status, .active)
+    }
+
     // A prior run that was suspended after saving its rows never post-processed them; the
     // next run must mirror them even though it inserts nothing itself.
     func testPostProcessCatchesUpRowsFromSuspendedRun() async throws {

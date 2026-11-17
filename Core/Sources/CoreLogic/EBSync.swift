@@ -221,23 +221,44 @@ extension CoreLogic {
             }
         }
 
+        // A bank can take a minute to answer, so the banks are waited on at once: only the network
+        // waits overlap, every step on the context stays on the main actor. A bank's own
+        // connections still run in turn, since one can take over another's account and revoke it,
+        // and a revoked connection must not then sync. Results come in the order the connections
+        // were made.
         @MainActor
         public static func syncAll(
             api: any EBSyncAPI, in ctx: ModelContext, now: Date = .now
         ) async -> [SyncResult] {
-            let all = (try? ctx.fetch(FetchDescriptor<Connection>())) ?? []
-            var out: [SyncResult] = []
-            for connection in all where connection.connector == .enablebanking {
-                if connection.status == .revoked || connection.status == .expired { continue }
-                do {
-                    out.append(try await sync(connection: connection, api: api, in: ctx, now: now))
-                } catch {
-                    var failed = SyncResult(connectionId: connection.id)
-                    failed.errors.append(describe(error))
-                    out.append(failed)
+            // The children run on the main actor as well, so the context and its models never leave it.
+            nonisolated(unsafe) let ctx = ctx
+            nonisolated(unsafe) let all = ((try? ctx.fetch(FetchDescriptor<Connection>(sortBy: [SortDescriptor(\.createdAt)]))) ?? [])
+                .filter { $0.connector == .enablebanking }
+            let banks = Dictionary(grouping: all.indices) {
+                all[$0].institutionId ?? all[$0].institutionName ?? all[$0].id.uuidString
+            }.values
+            return await withTaskGroup(of: [(Int, SyncResult)].self) { group in
+                for indices in banks {
+                    group.addTask { @MainActor in
+                        var out: [(Int, SyncResult)] = []
+                        for i in indices {
+                            let connection = all[i]
+                            if connection.status == .revoked || connection.status == .expired { continue }
+                            do {
+                                out.append((i, try await sync(connection: connection, api: api, in: ctx, now: now)))
+                            } catch {
+                                var failed = SyncResult(connectionId: connection.id)
+                                failed.errors.append(describe(error))
+                                out.append((i, failed))
+                            }
+                        }
+                        return out
+                    }
                 }
+                var results: [(Int, SyncResult)] = []
+                for await bank in group { results += bank }
+                return results.sorted { $0.0 < $1.0 }.map(\.1)
             }
-            return out
         }
 
         // A sync of every connection in a few words: how many synced cleanly, what came in, and
