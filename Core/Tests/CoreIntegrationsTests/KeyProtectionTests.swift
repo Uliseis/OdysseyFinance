@@ -23,6 +23,14 @@ final class KeyProtectionTests: XCTestCase {
         XCTAssertNil(add[kSecAttrAccessControl])
     }
 
+    // The shape EBKeychain and MarketKeychain send.
+    func testTheKeychainsSyncFlagIsReadAsSynced() {
+        var synced = item(synchronizable: true)
+        synced[kSecAttrSynchronizable] = kCFBooleanTrue as Any
+        let add = KeyProtection.add(Data("value".utf8), to: synced)
+        XCTAssertEqual(accessible(add), kSecAttrAccessibleAfterFirstUnlock as String)
+    }
+
     func testAKeyThatDoesntSyncIsSavedForThisDeviceOnly() {
         let add = KeyProtection.add(Data("value".utf8), to: item(synchronizable: false))
         XCTAssertEqual(accessible(add), kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
