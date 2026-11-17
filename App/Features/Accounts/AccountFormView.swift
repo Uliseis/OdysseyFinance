@@ -114,8 +114,9 @@ struct AccountFormView: View {
                 Button("Archive", role: .destructive) { save(archiveConfirmed: true) }
                 Button("Cancel", role: .cancel) {}
             } message: { impact in
-                Text(impact.summary + " To keep it out of your totals but keep its transfers, "
-                     + "turn on Exclude from net worth instead.")
+                Text(impact.summary + (edit.excluded
+                    ? " It's already excluded from net worth, so leaving it unarchived keeps it out of your totals and keeps its transfers."
+                    : " To keep it out of your totals but keep its transfers, turn on Exclude from net worth instead."))
             }
             .saveErrorAlert($saveError)
             .onAppear { openingText = Money.plainAmountText(edit.openingBalance) }
