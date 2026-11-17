@@ -139,6 +139,143 @@ final class AccountsMutationsTests: XCTestCase {
         XCTAssertTrue(a.archived)
     }
 
+    // MARK: - archiveImpact
+
+    private func pair(_ ctx: ModelContext, _ from: Account, _ to: Account, _ amount: Decimal) {
+        let group = TransferGroup(pairedAt: .now)
+        ctx.insert(group)
+        _ = S.makeTx(ctx, account: from, amount: -amount, direction: .debit, isTransfer: true, transferGroup: group)
+        _ = S.makeTx(ctx, account: to, amount: amount, direction: .credit, isTransfer: true, transferGroup: group)
+    }
+
+    func testArchiveImpactCountsPairsWithActiveAccounts() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let holding = S.makeAccount(ctx, name: "Holding", space: space)
+        let invest = S.makeAccount(ctx, name: "Invest", space: space, excluded: true)
+        let bank = S.makeAccount(ctx, name: "Bank", space: space)
+        pair(ctx, holding, invest, 100)
+        pair(ctx, holding, invest, 250)
+        pair(ctx, bank, holding, 40)
+        pair(ctx, bank, invest, 70) // doesn't touch the account being archived
+        _ = S.makeTx(ctx, account: holding, amount: -5, direction: .debit)
+        try ctx.save()
+
+        let impact = try A.archiveImpact(of: holding, in: ctx)
+        XCTAssertEqual(impact.transfers, 3)
+        XCTAssertEqual(impact.copiesDeleted, 0)
+        XCTAssertEqual(impact.counterparts, ["Bank", "Invest"])
+        XCTAssertEqual(impact.totalEur, 390)
+        XCTAssertEqual(impact.summary,
+                       "Its 3 transfers with Bank and Invest are unpaired and count as income or spending again.")
+        XCTAssertFalse(ctx.hasChanges, "the preview changes nothing")
+
+        let repair = try XCTUnwrap(A.setArchived(holding, true, in: ctx))
+        XCTAssertEqual(repair.groupsBroken, 3)
+        let stillPaired = try ctx.fetch(FetchDescriptor<Transaction>(predicate: #Predicate { $0.isTransfer }))
+        XCTAssertEqual(stillPaired.count, 2, "only the bank ↔ invest pair is left")
+    }
+
+    func testArchiveImpactSkipsPairsWhoseOtherLegIsAlreadyArchived() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let holding = S.makeAccount(ctx, name: "Holding", space: space)
+        let closed = S.makeAccount(ctx, name: "Closed", space: space, archived: true)
+        pair(ctx, holding, closed, 60)
+        try ctx.save()
+
+        // Both legs end up on archived accounts, so nothing that counts changes.
+        let impact = try A.archiveImpact(of: holding, in: ctx)
+        XCTAssertTrue(impact.isEmpty)
+        XCTAssertEqual(impact.counterparts, [])
+        XCTAssertEqual(impact.totalEur, 0)
+        XCTAssertEqual(try A.setArchived(holding, true, in: ctx)?.groupsBroken, 1)
+    }
+
+    func testArchiveImpactIsEmptyWithoutTransfersOrWhenAlreadyArchived() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let lone = S.makeAccount(ctx, name: "Lone", space: space)
+        _ = S.makeTx(ctx, account: lone, amount: -5, direction: .debit)
+        let gone = S.makeAccount(ctx, name: "Gone", space: space, archived: true)
+        let other = S.makeAccount(ctx, name: "Other", space: space)
+        pair(ctx, gone, other, 10) // a stale pair: archiving again changes nothing
+        try ctx.save()
+
+        XCTAssertTrue(try A.archiveImpact(of: lone, in: ctx).isEmpty)
+        XCTAssertTrue(try A.archiveImpact(of: gone, in: ctx).isEmpty)
+    }
+
+    func testArchiveImpactSummaryForOneTransfer() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let holding = S.makeAccount(ctx, name: "Holding", space: space)
+        let bank = S.makeAccount(ctx, name: "Bank", space: space)
+        pair(ctx, bank, holding, 12.5)
+        try ctx.save()
+
+        let impact = try A.archiveImpact(of: holding, in: ctx)
+        XCTAssertEqual(impact.transfers, 1)
+        XCTAssertEqual(impact.totalEur, 12.5)
+        XCTAssertEqual(impact.summary, "Its transfer with Bank is unpaired and counts as income or spending again.")
+    }
+
+    // A route mirror's group breaks like any pair; on top, the mirror row itself is deleted.
+    func testArchiveImpactDescribesRouteMirrorsOnEitherSide() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let bank = S.makeAccount(ctx, name: "Bank", space: space)
+        let card = S.makeAccount(ctx, name: "Card", space: space)
+        let savings = S.makeAccount(ctx, name: "Savings", space: space)
+        try CoreLogic.TransferRoutes.createRoute(pattern: "CARD PAYOFF", target: card, in: ctx)
+        _ = S.makeTx(ctx, account: bank, amount: -50, direction: .debit,
+                     bookedAt: .now.addingTimeInterval(-100 * 86_400), description: "CARD PAYOFF")
+        pair(ctx, bank, savings, 30)
+        try ctx.save()
+        _ = try CoreLogic.TransferRoutes.apply(in: ctx)
+
+        // The card holds the mirror: archiving it deletes the mirror, and the bank's row
+        // counts as spending again.
+        let fromCard = try A.archiveImpact(of: card, in: ctx)
+        XCTAssertEqual(fromCard.transfers, 1)
+        XCTAssertEqual(fromCard.copiesDeleted, 0)
+        XCTAssertEqual(fromCard.counterparts, ["Bank"])
+        XCTAssertEqual(fromCard.totalEur, 50)
+
+        // The bank holds the source: archiving it deletes the mirror on the card.
+        let fromBank = try A.archiveImpact(of: bank, in: ctx)
+        XCTAssertEqual(fromBank.transfers, 2)
+        XCTAssertEqual(fromBank.copiesDeleted, 1)
+        XCTAssertEqual(fromBank.counterparts, ["Card", "Savings"])
+        XCTAssertEqual(fromBank.totalEur, 80)
+        XCTAssertEqual(fromBank.summary,
+                       "Its 2 transfers with Card and Savings are unpaired: 1 counts as income or spending again, "
+                       + "and 1 that a transfer route copied there is deleted.")
+
+        let mirrors = FetchDescriptor<Transaction>(predicate: #Predicate { $0.routedFromTx != nil })
+        let repair = try XCTUnwrap(A.setArchived(bank, true, in: ctx))
+        XCTAssertEqual(repair.mirrorsDeleted, 1)
+        XCTAssertEqual(try ctx.fetchCount(mirrors), 0)
+    }
+
+    func testArchiveImpactSummaryWhenEveryTransferIsACopy() throws {
+        let ctx = try S.makeContext()
+        let space = S.makeSpace(ctx)
+        let bank = S.makeAccount(ctx, name: "Bank", space: space)
+        let card = S.makeAccount(ctx, name: "Card", space: space)
+        try CoreLogic.TransferRoutes.createRoute(pattern: "CARD PAYOFF", target: card, in: ctx)
+        for amount: Decimal in [20, 35] {
+            _ = S.makeTx(ctx, account: bank, amount: -amount, direction: .debit, description: "CARD PAYOFF")
+        }
+        try ctx.save()
+        _ = try CoreLogic.TransferRoutes.apply(in: ctx)
+
+        let impact = try A.archiveImpact(of: bank, in: ctx)
+        XCTAssertEqual(impact.transfers, 2)
+        XCTAssertEqual(impact.copiesDeleted, 2)
+        XCTAssertEqual(impact.summary, "Its 2 transfers with Card were copied there by a transfer route and are deleted.")
+    }
+
     func testSetAndClearAnchorTogether() throws {
         let ctx = try S.makeContext()
         let a = try A.createManual(name: "Cash", institution: "Wallet", in: ctx)

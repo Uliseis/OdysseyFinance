@@ -123,6 +123,67 @@ extension CoreLogic.Accounts {
         return repair
     }
 
+    // What archiving unpairs, counted on the other accounts' legs: on an active account they
+    // stop being transfers, so they count as income or spending again (or stop counting as
+    // contributions on an investment account). Legs on accounts already archived count nowhere.
+    public struct ArchiveImpact: Equatable, Sendable {
+        public var transfers = 0
+        // Of those, rows a transfer route copied into the other account; archiving deletes them.
+        public var copiesDeleted = 0
+        public var counterparts: [String] = []
+        public var totalEur: Decimal = 0
+
+        public var isEmpty: Bool { transfers == 0 }
+
+        public var summary: String {
+            guard !isEmpty else { return "" }
+            let names = Self.joined(counterparts)
+            let kept = transfers - copiesDeleted
+            func n(_ count: Int, _ one: String, _ many: String) -> String { count == 1 ? one : many }
+            if copiesDeleted == 0 {
+                return transfers == 1
+                    ? "Its transfer with \(names) is unpaired and counts as income or spending again."
+                    : "Its \(transfers) transfers with \(names) are unpaired and count as income or spending again."
+            }
+            if kept == 0 {
+                return transfers == 1
+                    ? "Its transfer with \(names) was copied there by a transfer route and is deleted."
+                    : "Its \(transfers) transfers with \(names) were copied there by a transfer route and are deleted."
+            }
+            return "Its \(transfers) transfers with \(names) are unpaired: "
+                + "\(kept) \(n(kept, "counts", "count")) as income or spending again, "
+                + "and \(copiesDeleted) that a transfer route copied there \(n(copiesDeleted, "is", "are")) deleted."
+        }
+
+        // Spelled out rather than ListFormatter, which would follow the device's language.
+        private static func joined(_ names: [String]) -> String {
+            guard names.count > 1, let last = names.last else { return names.first ?? "" }
+            return names.dropLast().joined(separator: ", ") + " and " + last
+        }
+    }
+
+    @MainActor
+    public static func archiveImpact(of account: Account, in ctx: ModelContext) throws -> ArchiveImpact {
+        guard !account.archived else { return ArchiveImpact() }
+        let id = account.id
+        let plan = try CoreLogic.Transfers.repairPlan(in: ctx, accountId: id, archiving: id)
+        var legs: [UUID: Transaction] = [:]
+        for t in plan.broken.joined() where t.account?.id != id { legs[t.id] = t }
+        for (mirror, source) in plan.mirrors {
+            let other = mirror.account?.id == id ? source : mirror
+            if other.account?.id != id { legs[other.id] = other }
+        }
+        let copies = Set(plan.mirrors.map(\.mirror.id))
+        let counted = legs.values.filter { CoreLogic.AccountStatus.isUsableForTransfers($0.account) }
+
+        var impact = ArchiveImpact()
+        impact.transfers = counted.count
+        impact.copiesDeleted = counted.filter { copies.contains($0.id) }.count
+        impact.counterparts = Set(counted.compactMap { $0.account?.displayName }).sorted()
+        impact.totalEur = counted.reduce(0) { $0 + abs($1.amountEur ?? 0) }
+        return impact
+    }
+
     @MainActor
     public static func delete(_ account: Account, in ctx: ModelContext) throws {
         ctx.delete(account)

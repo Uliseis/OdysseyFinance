@@ -110,9 +110,49 @@ extension CoreLogic {
             in ctx: ModelContext,
             accountId: UUID? = nil
         ) throws -> RepairResult {
+            let plan = try repairPlan(in: ctx, accountId: accountId)
             var result = RepairResult(
-                groupsBroken: 0, txsUnflagged: 0, mirrorsDeleted: 0, orphansFixed: 0
+                groupsBroken: plan.broken.count, txsUnflagged: 0,
+                mirrorsDeleted: 0, orphansFixed: plan.orphans.count
             )
+            for t in (plan.broken + plan.orphans).joined() {
+                t.isTransfer = false
+                t.transferGroup = nil
+                result.txsUnflagged += 1
+            }
+            for (mirror, _) in plan.mirrors {
+                ctx.delete(mirror)
+                result.mirrorsDeleted += 1
+            }
+            for (_, source) in plan.mirrors {
+                source.isTransfer = false
+                source.transferGroup = nil
+            }
+
+            try ctx.saveTouchingChanges()
+            return result
+        }
+
+        // What repairGroups would change, found without changing anything. `archiving` reads
+        // that account as archived already, so the archive warning previews exactly what
+        // setArchived breaks.
+        struct RepairPlan {
+            var broken: [[Transaction]] = []
+            var orphans: [[Transaction]] = []
+            var mirrors: [(mirror: Transaction, source: Transaction)] = []
+        }
+
+        @MainActor
+        static func repairPlan(
+            in ctx: ModelContext,
+            accountId: UUID?,
+            archiving: UUID? = nil
+        ) throws -> RepairPlan {
+            var plan = RepairPlan()
+            func isArchived(_ account: Account?) -> Bool {
+                guard let account else { return false }
+                return account.archived || account.id == archiving
+            }
 
             let seedTxs: [Transaction]
             if let accID = accountId {
@@ -148,31 +188,17 @@ extension CoreLogic {
                 if let g = m.transferGroup { byGroup[g.id, default: []].append(m) }
             }
 
-            var txsToUnflag: [Transaction] = []
-            var orphansToReset: [Transaction] = []
             for (_, group) in byGroup {
                 let spaces = Set(group.map { $0.account?.space?.id })
-                let anyArchived = group.contains { $0.account?.archived == true }
+                let anyArchived = group.contains { isArchived($0.account) }
                 let hasMirror = group.contains { $0.routedFromTx != nil }
                 if spaces.count > 1 || anyArchived {
-                    txsToUnflag.append(contentsOf: group)
-                    result.groupsBroken += 1
+                    plan.broken.append(group)
                     continue
                 }
                 if group.count < 2 && !hasMirror {
-                    orphansToReset.append(contentsOf: group)
-                    result.orphansFixed += 1
+                    plan.orphans.append(group)
                 }
-            }
-            for t in txsToUnflag {
-                t.isTransfer = false
-                t.transferGroup = nil
-                result.txsUnflagged += 1
-            }
-            for t in orphansToReset {
-                t.isTransfer = false
-                t.transferGroup = nil
-                result.txsUnflagged += 1
             }
 
             let mirrorCandidates: [Transaction]
@@ -189,31 +215,18 @@ extension CoreLogic {
                 ))
             }
 
-            var toDelete: [Transaction] = []
-            var sourcesToReset: [Transaction] = []
             for m in mirrorCandidates {
                 guard let s = m.routedFromTx else { continue }
                 let mirrorSpace = m.account?.space?.id
                 let sourceSpace = s.account?.space?.id
                 let crossSpace = mirrorSpace != sourceSpace
-                let mirrorOK = CoreLogic.AccountStatus.isUsableForTransfers(m.account)
-                let sourceOK = CoreLogic.AccountStatus.isUsableForTransfers(s.account)
+                let mirrorOK = CoreLogic.AccountStatus.isUsableForTransfers(m.account) && !isArchived(m.account)
+                let sourceOK = CoreLogic.AccountStatus.isUsableForTransfers(s.account) && !isArchived(s.account)
                 if crossSpace || !mirrorOK || !sourceOK {
-                    toDelete.append(m)
-                    sourcesToReset.append(s)
+                    plan.mirrors.append((m, s))
                 }
             }
-            for m in toDelete {
-                ctx.delete(m)
-                result.mirrorsDeleted += 1
-            }
-            for s in sourcesToReset {
-                s.isTransfer = false
-                s.transferGroup = nil
-            }
-
-            try ctx.saveTouchingChanges()
-            return result
+            return plan
         }
 
         private struct Candidate {
