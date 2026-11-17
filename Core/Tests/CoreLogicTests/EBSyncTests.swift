@@ -19,6 +19,9 @@ final class EBSyncTests: XCTestCase {
         var txPages: [String: [TransactionsResponse]] = [:]
         var sessionError: Error?
         var txError: Error?
+        // What a request answers once its task is cancelled, as URLSession does.
+        var sessionErrorIfCancelled: Error?
+        var txErrorIfCancelled: Error?
         var lastTxQuery: EBTransactionQuery?
         var whileSessionInFlight: (@MainActor () -> Void)?
 
@@ -27,6 +30,7 @@ final class EBSyncTests: XCTestCase {
         func getSession(_ sessionId: String) async throws -> SessionResponse {
             if let whileSessionInFlight { await whileSessionInFlight() }
             if let sessionError { throw sessionError }
+            if Task.isCancelled, let sessionErrorIfCancelled { throw sessionErrorIfCancelled }
             return session
         }
         func getAccountDetails(_ accountUid: String) async throws -> AccountDetails {
@@ -40,6 +44,7 @@ final class EBSyncTests: XCTestCase {
         ) async throws -> TransactionsResponse {
             lastTxQuery = query
             if let txError { throw txError }
+            if Task.isCancelled, let txErrorIfCancelled { throw txErrorIfCancelled }
             var pages = txPages[accountUid] ?? []
             guard !pages.isEmpty else { return decode(#"{"transactions": []}"#) }
             let page = pages.removeFirst()
@@ -502,7 +507,8 @@ final class EBSyncTests: XCTestCase {
             let ctx = try S.makeContext()
             let conn = makeConnection(ctx)
             let api = StubAPI(session: makeSession())
-            api.sessionError = cancelled
+            api.details[Self.uid] = details()
+            api.sessionErrorIfCancelled = cancelled
             let task = Task { await Sync.syncAll(api: api, in: ctx) }
             api.whileSessionInFlight = { task.cancel() }
 
@@ -523,7 +529,7 @@ final class EBSyncTests: XCTestCase {
         _ = makeLinkedAccount(ctx, connection: conn)
         let api = StubAPI(session: makeSession())
         api.details[Self.uid] = details()
-        api.txError = URLError(.cancelled)
+        api.txErrorIfCancelled = URLError(.cancelled)
         let task = Task { await Sync.syncAll(api: api, in: ctx) }
         api.whileSessionInFlight = { task.cancel() }
 
@@ -534,6 +540,46 @@ final class EBSyncTests: XCTestCase {
         XCTAssertEqual(run.status, .error)
         XCTAssertEqual(run.error, Sync.cutOff)
         XCTAssertNil(conn.lastSyncAt, "the next run fetches the window again")
+    }
+
+    // A request cancelled while the sync itself carries on is an account's error, as before.
+    func testACancelledRequestWithoutTheSyncCancelledIsNotCutOff() async throws {
+        let ctx = try S.makeContext()
+        let conn = makeConnection(ctx)
+        _ = makeLinkedAccount(ctx, connection: conn)
+        let api = StubAPI(session: makeSession())
+        api.details[Self.uid] = details()
+        api.txError = URLError(.cancelled)
+
+        let results = await Sync.syncAll(api: api, in: ctx)
+
+        let errors = try XCTUnwrap(results.first?.errors)
+        XCTAssertEqual(errors.count, 1)
+        XCTAssertTrue(errors[0].hasPrefix("\(Self.uid): "), errors[0])
+        XCTAssertNotEqual(errors[0], Sync.cutOff)
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<SyncRun>()).first?.status, .partial)
+    }
+
+    // Banks still waiting when the sync is cancelled are all cut off; one already done stays done.
+    func testCancellingTheBanksAtOnceCutsOffEveryRunStillOut() async throws {
+        let ctx = try S.makeContext()
+        let (connections, api) = try pacedBanks(ctx, delays: [.seconds(30), .zero, .seconds(30)])
+        let task = Task { await Sync.syncAll(api: api, in: ctx) }
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+
+        let results = await task.value
+
+        XCTAssertEqual(results.map(\.errors), [[Sync.cutOff], [], [Sync.cutOff]])
+        let runs = try ctx.fetch(FetchDescriptor<SyncRun>())
+        XCTAssertEqual(runs.count, 3)
+        XCTAssertFalse(runs.contains { $0.status == .running || $0.finishedAt == nil }, "none left running")
+        for (connection, expected) in zip(connections, [SyncRunStatus.error, .ok, .error]) {
+            let id = connection.id
+            let run = try XCTUnwrap(runs.first { $0.connection?.id == id })
+            XCTAssertEqual(run.status, expected)
+            XCTAssertEqual(run.error, expected == .error ? Sync.cutOff : nil)
+        }
     }
 
     // A prior run that was suspended after saving its rows never post-processed them; the

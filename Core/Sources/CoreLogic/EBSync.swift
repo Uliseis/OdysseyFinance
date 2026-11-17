@@ -475,9 +475,10 @@ extension CoreLogic {
             return String(describing: error)
         }
 
-        // URLSession answers a cancelled request with its own error.
+        // URLSession answers a cancelled request with its own error. Only the sync's own task being
+        // cancelled cuts it off; a request cancelled by itself stays that account's error.
         private static func isCutOff(_ error: Error) -> Bool {
-            error is CancellationError || (error as? URLError)?.code == .cancelled
+            Task.isCancelled && (error is CancellationError || (error as? URLError)?.code == .cancelled)
         }
 
         private static func jsonObject<T: Encodable>(_ value: T) -> Any? {
