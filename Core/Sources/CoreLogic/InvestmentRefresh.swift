@@ -348,9 +348,9 @@ extension CoreLogic {
                 save()
                 defer { save() }
                 do {
-                    let quote = try await source.latest(isin: isin, currency: entry.currency)
+                    let quotes = try await source.recent(isin: isin, currency: entry.currency, since: nil)
                     entry.fetchedDay = today
-                    accept(quote, into: &entry)
+                    if let quote = quotes.last { accept(quote, into: &entry) }
                     result.cache.funds[isin] = entry
                 } catch {
                     if isCancellation(error) {

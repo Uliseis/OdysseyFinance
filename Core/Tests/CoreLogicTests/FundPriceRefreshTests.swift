@@ -659,13 +659,13 @@ private final class FakeFundSource: FundPriceSource {
         return info
     }
 
-    func latest(isin: String, currency: String) async throws -> FundQuote {
+    func recent(isin: String, currency: String, since: Date?) async throws -> [FundQuote] {
         latests.append(isin)
         onRequest?()
         if delay > .zero { try await Task.sleep(for: delay) }
         if let error = latestErrors[isin] { throw error }
         guard let quote = quotes[isin] else { throw FundPriceError.notFound }
-        return quote
+        return [quote]
     }
 }
 
