@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import Synchronization
 import UIKit
 import CoreLogic
 import CoreModel
@@ -131,27 +132,30 @@ func withBackgroundTask<T: Sendable, E: Error>(
     return try result.get()
 }
 
-@MainActor
-private final class BackgroundAssertion {
-    private var id = UIBackgroundTaskIdentifier.invalid
+// Ended once, by whichever comes first: the work finishing or the grace after expiry.
+private final class BackgroundAssertion: Sendable {
+    private let app: UIApplication
+    private let id = Mutex(UIBackgroundTaskIdentifier.invalid)
 
+    @MainActor
     init(_ name: String, onExpiry: @escaping @MainActor @Sendable () -> Void) {
-        id = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
+        app = UIApplication.shared
+        let begun = app.beginBackgroundTask(withName: name) { [self] in
             onExpiry()
-            // A moment on the main thread for the cancelled work to save what it cut short, ending
-            // well inside the time left: an assertion held past it gets the app killed.
-            let grace = min(1, UIApplication.shared.backgroundTimeRemaining - 1)
+            // A moment for the cancelled work to save what it cut short. Timed off the main thread,
+            // so a busy main thread can't hold the assertion past its time, which gets the app killed.
+            let grace = min(1, app.backgroundTimeRemaining - 2)
             guard grace > 0 else { return end() }
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(grace))
-                end()
-            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + grace) { self.end() }
         }
+        id.withLock { $0 = begun }
     }
 
     func end() {
-        guard id != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(id)
-        id = .invalid
+        let ending = id.withLock { current in
+            defer { current = .invalid }
+            return current
+        }
+        if ending != .invalid { app.endBackgroundTask(ending) }
     }
 }
