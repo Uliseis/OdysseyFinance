@@ -66,6 +66,31 @@ final class SyncSummaryTests: XCTestCase {
                        "Nothing to sync: no bank or live-priced investment account is set up.")
     }
 
+    // MARK: - At the Shortcuts action's deadline
+
+    func testBanksStillSyncingWhenTheAnswerIsDue() {
+        XCTAssertEqual(Summary.soFar(banks: nil, investments: valued(2)),
+                       "Investments refreshed (2). Banks still syncing in the background; they finish next time if iOS stops them.")
+        XCTAssertEqual(Summary.soFar(banks: nil, investments: valued(0, of: 0)),
+                       "Banks still syncing in the background; they finish next time if iOS stops them.")
+        XCTAssertEqual(Summary.soFar(banks: nil, investments: valued(1, of: 2, failures: ["Trading 212: add the API key in Settings"])),
+                       "Investments refreshed (1). Banks still syncing in the background; they finish next time if iOS stops them. Trading 212: add the API key in Settings.")
+    }
+
+    // Investments go first, so the banks haven't started either.
+    func testInvestmentsStillRefreshingWhenTheAnswerIsDue() {
+        XCTAssertEqual(Summary.soFar(banks: nil, investments: nil),
+                       "Still refreshing in the background; it finishes next time if iOS stops it.")
+    }
+
+    // Only the automations and the push were left, which the answer doesn't mention anyway.
+    func testBothPartsDoneByTheDeadlineAnswerAsUsual() {
+        XCTAssertEqual(Summary.soFar(banks: synced(2, new: 1), investments: valued(1)),
+                       Summary.text(banks: synced(2, new: 1), investments: valued(1)))
+        XCTAssertEqual(Summary.soFar(banks: .recent, investments: valued(1)),
+                       "Banks skipped (last tried under 15 minutes ago), investments refreshed (1).")
+    }
+
     // MARK: - Bank report
 
     @MainActor
