@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppIntents
 import UserNotifications
 import CoreModel
 import CoreLogic
@@ -58,6 +59,10 @@ struct OdysseyFinanceApp: App {
             stateStore: store
         )
         _syncEngine = State(initialValue: engine)
+        // Shortcuts actions run in this process, after init: they take this container and
+        // engine rather than opening the store a second time.
+        AppDependencyManager.shared.add(dependency: container)
+        AppDependencyManager.shared.add(dependency: engine)
 
         // BGTaskScheduler.register MUST be called exactly once per identifier before the
         // app finishes launching. Done here, in init, before Scene body is evaluated.

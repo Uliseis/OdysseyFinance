@@ -41,5 +41,14 @@ struct OdysseyShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Log Charge",
             systemImageName: "creditcard")
+        AppShortcut(
+            intent: SyncAndRefreshIntent(),
+            phrases: [
+                "Sync \(.applicationName)",
+                "Sync and refresh \(.applicationName)",
+                "Refresh \(.applicationName)",
+            ],
+            shortTitle: "Sync & Refresh",
+            systemImageName: "arrow.triangle.2.circlepath")
     }
 }
