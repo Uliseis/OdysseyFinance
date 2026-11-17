@@ -72,6 +72,8 @@ A card statement import (Revolut or Amex CSV, on a manual account) never re-adds
 
 `TransferInvariants` checks that every group balances and stays consistent across archive, exclude and space changes.
 
+Archiving an account unpairs every transfer it takes part in and deletes the route mirrors on either side, so the other legs count as income or spending again; `Accounts.archiveImpact` reads the same repair rules without applying them, and the account form and Claude's `archiveAccount` preview use it to say how many transfers, with which accounts, before anything changes.
+
 ## Investments
 
 An investment account is modelled like a cash account: an **anchor plus everything booked since**.
