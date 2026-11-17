@@ -41,7 +41,10 @@ public final class CloudKitSyncEngine {
     // pulls don't accumulate state. Never the observed main context.
     private func makeContext() -> ModelContext { ModelContext(modelContainer) }
 
+    // Safe to call again: a Shortcuts action or background task in a launch that never showed
+    // the UI starts it, and the scene's own start may follow.
     public func start() throws {
+        guard engine == nil else { return }
         let container = CKContainer(identifier: containerIdentifier)
         let database = container.privateCloudDatabase
         let saved = try? stateStore.load()
