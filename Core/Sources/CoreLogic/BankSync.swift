@@ -77,12 +77,24 @@ extension CoreLogic {
             } catch {
                 return .noKey(keyProblem(error))
             }
+            guard let results = await runNow(throttle: throttle, { await EBSync.syncAll(api: api, in: ctx) })
+            else { return .busy }
+            return .synced(EBSync.report(results, in: ctx))
+        }
+
+        // A sync someone asked for (a tap in Settings, or Claude with the user's go-ahead) skips
+        // the interval, but never starts over one already out: nil then. A run that wasn't cut
+        // short counts for the others, even when the bank failed it.
+        @MainActor
+        public static func runNow<T>(
+            throttle: BankSyncThrottle = BankSyncThrottle(), _ sync: () async throws -> T
+        ) async rethrows -> T? {
+            guard !isRunning else { return nil }
             isRunning = true
             defer { isRunning = false }
             throttle.markStarted()
-            let results = await EBSync.syncAll(api: api, in: ctx)
-            if !Task.isCancelled { throttle.record() }
-            return .synced(EBSync.report(results, in: ctx))
+            defer { if !Task.isCancelled { throttle.record() } }
+            return try await sync()
         }
 
         // Worded like the investments' key problems: only a key that isn't there needs adding.

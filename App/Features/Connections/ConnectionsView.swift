@@ -103,13 +103,19 @@ struct ConnectionsListView: View {
             do {
                 let signer = try EBKeychain().loadSigner()
                 let results = await withBackgroundTask("EBSync") {
-                    await CoreLogic.EBSync.syncAll(api: EBClient(tokenProvider: signer), in: ctx)
+                    await CoreLogic.BankSync.runNow {
+                        await CoreLogic.EBSync.syncAll(api: EBClient(tokenProvider: signer), in: ctx)
+                    }
                 }
-                let inserted = results.reduce(0) { $0 + $1.transactionsInserted }
-                let failed = results.filter { !$0.errors.isEmpty }.count
-                syncMessage = failed == 0
-                    ? "Synced \(pluralized(results.count, "connection")). \(pluralized(inserted, "new transaction"))."
-                    : "Synced with issues on \(pluralized(failed, "connection")). \(pluralized(inserted, "new transaction"))."
+                if let results {
+                    let inserted = results.reduce(0) { $0 + $1.transactionsInserted }
+                    let failed = results.filter { !$0.errors.isEmpty }.count
+                    syncMessage = failed == 0
+                        ? "Synced \(pluralized(results.count, "connection")). \(pluralized(inserted, "new transaction"))."
+                        : "Synced with issues on \(pluralized(failed, "connection")). \(pluralized(inserted, "new transaction"))."
+                } else {
+                    syncMessage = "The banks are already syncing."
+                }
             } catch {
                 syncMessage = "Sync failed — check the Enable Banking key."
             }
