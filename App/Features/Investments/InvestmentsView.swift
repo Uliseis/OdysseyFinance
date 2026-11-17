@@ -233,6 +233,9 @@ private struct AccountMetricRow: View {
                     }
                     Text(subtitle).font(.caption).foregroundStyle(.secondary)
                 }
+                if let days = row.priceDays {
+                    Text(FundHoldings.pricesFrom(days)).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 2) {
