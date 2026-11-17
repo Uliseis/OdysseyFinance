@@ -125,7 +125,7 @@ struct OdysseyFinanceApp: App {
                         // locally. Log and carry on; next launch retries.
                         print("CoreSync start failed: \(error)")
                     }
-                    BackgroundSync.schedule()
+                    await BackgroundSync.schedule()
                     await BackgroundSync.scheduleInvestments()
                     // Cold launch: scenePhase never transitions into the initial .active.
                     await ForegroundBankSync.runIfDue(
