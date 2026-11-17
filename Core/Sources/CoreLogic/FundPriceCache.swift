@@ -18,11 +18,14 @@ extension CoreLogic {
             // replaces it. While it's held, accounts with the fund aren't valued.
             public var pendingPrice: Decimal?
             public var pendingDay: Date?
+            // Accepted daily prices, oldest first: what values the days since an account's last
+            // valuation. A cache written before they were kept has none.
+            public var history: [Funds.PricePoint]
 
             public init(
                 name: String, currency: String, price: Decimal? = nil, priceDay: Date? = nil,
                 fetchedDay: Date? = nil, previousPrice: Decimal? = nil,
-                pendingPrice: Decimal? = nil, pendingDay: Date? = nil
+                pendingPrice: Decimal? = nil, pendingDay: Date? = nil, history: [Funds.PricePoint] = []
             ) {
                 self.name = name
                 self.currency = currency
@@ -32,6 +35,27 @@ extension CoreLogic {
                 self.previousPrice = previousPrice
                 self.pendingPrice = pendingPrice
                 self.pendingDay = pendingDay
+                self.history = history
+            }
+
+            public init(from decoder: any Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                name = try c.decode(String.self, forKey: .name)
+                currency = try c.decode(String.self, forKey: .currency)
+                price = try c.decodeIfPresent(Decimal.self, forKey: .price)
+                priceDay = try c.decodeIfPresent(Date.self, forKey: .priceDay)
+                fetchedDay = try c.decodeIfPresent(Date.self, forKey: .fetchedDay)
+                previousPrice = try c.decodeIfPresent(Decimal.self, forKey: .previousPrice)
+                pendingPrice = try c.decodeIfPresent(Decimal.self, forKey: .pendingPrice)
+                pendingDay = try c.decodeIfPresent(Date.self, forKey: .pendingDay)
+                history = try c.decodeIfPresent([Funds.PricePoint].self, forKey: .history) ?? []
+            }
+
+            // The daily prices up to the newest accepted one, which ends them even in a cache
+            // written before they were kept.
+            public var dailyPrices: [Funds.PricePoint] {
+                guard let price, let priceDay else { return history }
+                return history.filter { $0.date < priceDay } + [Funds.PricePoint(date: priceDay, priceEur: price)]
             }
         }
 
@@ -48,6 +72,13 @@ extension CoreLogic {
         // price isn't one.
         public var eurPrices: [String: Decimal] {
             funds.compactMapValues { $0.currency == "EUR" ? $0.price : nil }
+        }
+
+        // The earliest and latest of these funds' newest price days; nil when none has a price.
+        public func priceDays(for isins: some Sequence<String>) -> ClosedRange<Date>? {
+            let days = isins.compactMap { funds[$0]?.priceDay }
+            guard let first = days.min(), let last = days.max() else { return nil }
+            return first...last
         }
 
         // A fund that can't be read is dropped and looked up again; the rest stay. The request
