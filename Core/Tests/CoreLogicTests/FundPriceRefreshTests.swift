@@ -738,10 +738,13 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(auto.map(\.marketValueEur), [d("104.5"), d("118.5"), d("119.5"), d("120.5")])
     }
 
-    func testAValueAlreadyOnTheNewestPriceDayIsReplacedOnlyWhenItDiffers() async throws {
+    // Written by a refresh that dated values by the time it ran, with older prices.
+    func testAnAutomaticValueAlreadyOnTheNewestPriceDayIsReplaced() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
-        try value(acc, ctx, on: 12, "99")
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(12).addingTimeInterval(9 * 3600), marketValueEur: 99,
+                                      notes: "auto: funds"))
+        try ctx.save()
 
         let outcome = await run(ctx)
 
@@ -751,6 +754,22 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(values[0].marketValueEur, d("108.01"))
         XCTAssertEqual(values[0].asOf, day(12))
         XCTAssertEqual(values[0].notes, "auto: funds")
+    }
+
+    // Typed in, or sent by Claude: someone meant that figure for that day.
+    func testAValueEnteredOnTheNewestPriceDayIsKept() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try value(acc, ctx, on: 12, "99")
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(11), marketValueEur: 98, notes: "From the broker's statement"))
+        try ctx.save()
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.updated, [])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: kept the value entered on 12 Mar."])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [98, 99])
     }
 
     func testAValueDatedAfterTheNewestPricesIsLeftAlone() async throws {

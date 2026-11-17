@@ -298,8 +298,9 @@ extension CoreLogic {
                 return []
             }
 
-            // Every weekday after the last value up to the newest price, then that day itself: a
-            // value already on it is replaced when it differs. Without funds held, cash is known today.
+            // Every weekday after the last value up to the newest price, then that day itself: an
+            // automatic value already on it is replaced when it differs. Without funds held, cash
+            // is known today.
             let through = min(newest.max() ?? today, until ?? .distantFuture)
             if !awaiting.isEmpty {
                 outcome.failures.append("\(name): \(awaiting.joined(separator: "; ")); no value after \(Funds.dayRange(through...through)).")
@@ -320,6 +321,7 @@ extension CoreLogic {
             var unpriced: [Date] = []
             var missing: Set<String> = []
             var refused = false
+            var kept: Date?
             for day in days {
                 let value = Funds.value(on: day, trades: fund.trades, prices: prices, cash: fund.ledger)
                 guard let total = value.valueEur else {
@@ -333,10 +335,15 @@ extension CoreLogic {
                 // The value includes the transfers booked on its day, so it's dated late enough
                 // that Investments doesn't add a timed one on top again.
                 let asOf = fund.legs.map(\.bookedAt).filter { Funds.dayStart($0) == day }.max() ?? day
-                if let existing = fund.valuations.last, Funds.dayStart(existing.asOf) == day,
-                   existing.marketValueEur == market, existing.cashValueEur == cash,
-                   existing.notes == note, existing.asOf == asOf {
-                    continue
+                if let existing = fund.valuations.last, Funds.dayStart(existing.asOf) == day {
+                    // Typed in or sent by Claude: someone meant that figure for that day.
+                    guard existing.notes?.hasPrefix(note) == true else {
+                        kept = day
+                        continue
+                    }
+                    if existing.marketValueEur == market, existing.cashValueEur == cash, existing.asOf == asOf {
+                        continue
+                    }
                 }
                 if isImplausible(market, previous: previous) {
                     outcome.failures.append(
@@ -373,7 +380,9 @@ extension CoreLogic {
                 outcome.failures.append("\(name): \(count(unpriced.count, "day")) not valued "
                     + "(\(Funds.dayRange(first...last))): no price in the week before for \(labels.joined(separator: ", ")).")
             }
-            if recorded.isEmpty, unpriced.isEmpty, !refused, let lastDay {
+            if let kept {
+                notices.append("\(name): kept the value entered on \(Funds.dayRange(kept...kept)).")
+            } else if recorded.isEmpty, unpriced.isEmpty, !refused, let lastDay {
                 notices.append("\(name): no new prices since \(Funds.dayRange(lastDay...lastDay)).")
             }
             return notices
