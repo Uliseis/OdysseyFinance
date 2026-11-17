@@ -19,7 +19,9 @@ enum ForegroundBankSync {
         // intent; a bank sync started there is suspended seconds later and shows up as an
         // "abandoned" run, having also burned the 15-minute window for the real foreground.
         guard UIApplication.shared.applicationState != .background else { return }
-        guard CoreLogic.BankSyncThrottle().isDue(), !CoreLogic.BankSync.isRunning else { return }
+        let pace = CoreLogic.ForegroundSyncPace()
+        guard pace.isDue(), CoreLogic.BankSyncThrottle().isDue(), !CoreLogic.BankSync.isRunning else { return }
+        pace.record()
         await syncAndRefresh(ctx, engine: engine)
     }
 
