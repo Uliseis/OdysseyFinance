@@ -367,7 +367,7 @@ extension CoreLogic {
             return NSDecimalNumber(decimal: rounded).intValue
         }
 
-        private static func cents(_ value: Decimal) -> Decimal {
+        static func cents(_ value: Decimal) -> Decimal {
             var input = value
             var rounded = Decimal()
             NSDecimalRound(&rounded, &input, 2, .plain)
