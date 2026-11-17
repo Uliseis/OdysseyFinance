@@ -476,6 +476,7 @@ extension CoreLogic {
                     let quotes = try await source.recent(isin: isin, currency: entry.currency, since: since[isin])
                     entry.fetchedDay = today
                     accept(quotes, into: &entry)
+                    backfill(quotes, into: &entry)
                     let kept = dailyPricesKept(since: since[isin], today: today)
                     entry.history.removeAll { $0.date < kept }
                     result.cache.funds[isin] = entry
@@ -555,6 +556,24 @@ extension CoreLogic {
             entry.price = top.priceEur
             entry.priceDay = top.date
             entry.previousPrice = previous
+        }
+
+        // Days before the newest accepted price that the cache doesn't have yet, brought by a
+        // request reaching back for an older gap, join the daily prices; the price itself stays.
+        // A day that moves more than the limit from every day beside it is a misprint and is
+        // left out.
+        private static func backfill(_ series: [FundQuote], into entry: inout FundPriceCache.Entry) {
+            guard let priceDay = entry.priceDay else { return }
+            let known = entry.dailyPrices
+            let knownDays = Set(known.map(\.date))
+            let older = series.filter { $0.day < priceDay && !knownDays.contains($0.day) }
+            guard !older.isEmpty else { return }
+            let all = (known + older.map { Funds.PricePoint(date: $0.day, priceEur: $0.price) }).sorted { $0.date < $1.date }
+            entry.history = all.indices.filter { i in
+                guard !knownDays.contains(all[i].date) else { return true }
+                let beside = [i - 1, i + 1].filter(all.indices.contains).map { all[$0].priceEur }
+                return !beside.allSatisfy { isJump(all[i].priceEur, from: $0) }
+            }.map { all[$0] }
         }
 
         // A price too old to value with says nothing about how far the market has moved since,
