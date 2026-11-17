@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftData
 import CoreModel
 import CoreIntegrations
@@ -16,6 +17,8 @@ extension CoreLogic {
             public var failures: [String] = []
             // Worth knowing but nothing refused, like a value saved from a cached price.
             public var notices: [String] = []
+            // Accounts with a live source; none means there was nothing to refresh.
+            public var liveAccounts = 0
         }
 
         public static let cryptoPrefix = "crypto:"
@@ -86,6 +89,28 @@ extension CoreLogic {
             return await task.value
         }
 
+        // For a background task about to expire: the run is a task of its own, so cancelling
+        // its caller leaves it going, and iOS suspends the app as soon as the task ends.
+        @MainActor
+        public static func cancel() {
+            current?.cancel()
+        }
+
+        // When the background refresh may next start: the first 6:00 local at least six hours
+        // away. A fund's price changes once a day and iOS starts the task later than asked
+        // anyway, so a run each morning is enough, and never one straight after another.
+        public static func nextBackgroundRun(after now: Date, timeZone: TimeZone = .current) -> Date {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = timeZone
+            let earliest = now.addingTimeInterval(6 * 3600)
+            var run = cal.date(bySettingHour: 6, minute: 0, second: 0, of: now) ?? earliest
+            while run < earliest {
+                guard let next = cal.date(byAdding: .day, value: 1, to: run) else { return earliest }
+                run = next
+            }
+            return run
+        }
+
         @MainActor
         private static func refreshAll(
             in ctx: ModelContext, keychain: any MarketKeys, crypto: any CryptoPriceSource,
@@ -96,13 +121,14 @@ extension CoreLogic {
             guard let accounts = try? liveValuedAccounts(in: ctx), !accounts.isEmpty else {
                 return outcome
             }
+            outcome.liveAccounts = accounts.count
 
             // One request for every coin held, not one per account.
             let coinIds = Array(Set(accounts.compactMap { coinId(from: $0.liveValueSource) }))
             var prices: [String: Decimal] = [:]
             if !coinIds.isEmpty {
                 do { prices = try await crypto.prices(for: coinIds) }
-                catch { outcome.failures.append("Crypto prices: \(error)") }
+                catch { outcome.failures.append("Crypto prices: \(requestProblem(error))") }
             }
 
             var t212: Trading212Summary?
@@ -110,8 +136,10 @@ extension CoreLogic {
                 do {
                     let creds = try keychain.loadTrading212()
                     t212 = try await Trading212Client(credentials: creds).accountSummary()
+                } catch let error as MarketKeyError {
+                    outcome.failures.append("Trading 212: \(keyProblem(error, named: "API key"))")
                 } catch {
-                    outcome.failures.append("Trading 212: \(error)")
+                    outcome.failures.append("Trading 212: \(requestProblem(error))")
                 }
             }
 
@@ -197,9 +225,7 @@ extension CoreLogic {
             do {
                 apiKey = try keychain.loadEODHD()
             } catch {
-                // A locked device fails the read too; asking for the key again wouldn't help.
-                let why = error as? MarketKeyError == .notFound
-                    ? "add the EODHD key in Settings" : "the EODHD key couldn't be read (\(error))"
+                let why = keyProblem(error, named: "EODHD key")
                 for account in accounts { outcome.failures.append("\(account.displayName): \(why); not saved.") }
                 return
             }
@@ -640,6 +666,28 @@ extension CoreLogic {
 
         private static func count(_ n: Int, _ noun: String) -> String {
             "\(n) \(noun)\(n == 1 ? "" : "s")"
+        }
+
+        // The keys can be read only while the phone is unlocked, and a background run often
+        // finds it locked: asking for the key again wouldn't help then.
+        private static func keyProblem(_ error: any Error, named key: String) -> String {
+            switch error as? MarketKeyError {
+            case .notFound: "add the \(key) in Settings"
+            case .keychain(errSecInteractionNotAllowed): "the \(key) can't be read while the iPhone is locked"
+            default: "the \(key) couldn't be read (\(error))"
+            }
+        }
+
+        // Trading 212's and CoinGecko's errors in a few words, without the answer's body.
+        private static func requestProblem(_ error: any Error) -> String {
+            if let t212 = error as? Trading212Error, t212.status == 401 || t212.status == 403 {
+                return "the API key was rejected; check it in Settings"
+            }
+            switch (error as? Trading212Error)?.status ?? (error as? CryptoPriceError)?.status {
+            case .some(429): return "rate limited, try again later"
+            case .some(let status): return "the server answered \(status)"
+            case nil: return (error as? URLError)?.localizedDescription ?? "\(error)"
+            }
         }
 
         // The client's errors without the request: its URL carries the key.

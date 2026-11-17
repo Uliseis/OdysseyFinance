@@ -305,6 +305,27 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(try valuations(acc, ctx).count, 1)
     }
 
+    // What an expiring background task calls: iOS suspends the app right after.
+    func testCancelStopsTheRunningRefresh() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        source.delay = .seconds(30)
+        source.onRequest = { R.cancel() }
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(source.lookups, [a], "no request after the cancel")
+        XCTAssertEqual(source.latests, [])
+        XCTAssertEqual(cache.cache.requestCount, 0, "the request it cut short isn't counted")
+        XCTAssertTrue(outcome.updated.isEmpty)
+        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+
+        source.delay = .zero
+        source.onRequest = nil
+        let next = await run(ctx)
+        XCTAssertEqual(next.updated, [acc.id], "the next run isn't affected: \(next.failures)")
+    }
+
     func testARequestEndingInCancellationIsNotCountedAndEndsTheRequests() async throws {
         let ctx = try S.makeContext()
         _ = try makeAccount(ctx)
@@ -616,7 +637,7 @@ final class FundPriceRefreshTests: XCTestCase {
     func testAKeychainThatCantBeReadDoesntAskForTheKeyAgain() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
-        keys = FakeKeys(eodhd: nil, error: .keychain(errSecInteractionNotAllowed))
+        keys = FakeKeys(eodhd: nil, error: .keychain(errSecDecode))
 
         let outcome = await run(ctx)
 
@@ -625,6 +646,17 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertFalse(outcome.failures[0].contains("Settings"), outcome.failures[0])
         XCTAssertEqual(source.lookups + source.latests, [])
         XCTAssertEqual(try valuations(acc, ctx).count, 0)
+    }
+
+    func testALockedKeychainSaysThePhoneIsLocked() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        keys = FakeKeys(eodhd: nil, error: .keychain(errSecInteractionNotAllowed))
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.failures, ["Funds: the EODHD key can't be read while the iPhone is locked; not saved."])
+        XCTAssertEqual(source.lookups + source.latests, [])
     }
 
     func testWithoutABrokerCashAnchorNothingIsFetchedOrSaved() async throws {
