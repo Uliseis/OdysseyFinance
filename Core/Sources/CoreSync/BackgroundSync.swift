@@ -4,7 +4,6 @@ import Foundation
 import BackgroundTasks
 import SwiftData
 import CoreLogic
-import CoreIntegrations
 
 public enum BackgroundSync {
     public static let taskIdentifier = "com.uliseis.odysseyfinance.refresh"
@@ -98,13 +97,13 @@ public enum BackgroundSync {
 
     // Pull bank transactions before the CloudKit push so new ones ride out the same run.
     // Writes to mainContext → SaveObserver enqueues the inserts for push. Dedupe is on
-    // (accountId, externalId) in EBSync, so replays insert nothing.
-    // ponytail: try? skips silently when the key is absent or unreadable (not yet unlocked
-    // since boot) — it just syncs on the next run that can read it.
+    // (accountId, externalId) in EBSync, so replays insert nothing. Skips banks synced in the
+    // last 6 hours, and quietly when the key is absent or unreadable (not yet unlocked since
+    // boot): the next run that can read it syncs.
     @MainActor
     private static func syncEnableBanking(_ container: ModelContainer) async {
-        guard let signer = try? EBKeychain().loadSigner() else { return }
-        _ = await CoreLogic.EBSync.syncAll(api: EBClient(tokenProvider: signer), in: container.mainContext)
+        _ = await CoreLogic.BankSync.runIfDue(
+            in: container.mainContext, every: CoreLogic.BankSyncThrottle.backgroundInterval)
     }
 }
 

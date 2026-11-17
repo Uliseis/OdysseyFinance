@@ -1,5 +1,4 @@
 import Foundation
-import Security
 import SwiftData
 import UIKit
 import CoreLogic
@@ -11,35 +10,16 @@ import CoreSync
 // BGProcessingTask — and iOS runs processing tasks opportunistically, typically only while
 // charging and idle, so in practice the app never refreshed itself. This pulls Enable
 // Banking whenever the app comes to the foreground, and from the Sync & Refresh Shortcuts
-// action, throttled so opening the app twice in a row doesn't hammer the API.
+// action, throttled (CoreLogic.BankSyncThrottle) so opening the app twice in a row doesn't
+// hammer the API.
 enum ForegroundBankSync {
-    static let minimumInterval: TimeInterval = 15 * 60
-    private static let lastRunKey = "ForegroundBankSync.lastRunAt"
-    // While a bank sync is out, so no second one starts over it.
-    @MainActor private static var syncingBanks = false
-
-    private static var lastRun: Date? {
-        get {
-            let t = UserDefaults.standard.double(forKey: lastRunKey)
-            return t > 0 ? Date(timeIntervalSince1970: t) : nil
-        }
-        set {
-            UserDefaults.standard.set(newValue?.timeIntervalSince1970 ?? 0, forKey: lastRunKey)
-        }
-    }
-
-    static func isDue(now: Date = .now) -> Bool {
-        guard let lastRun else { return true }
-        return now.timeIntervalSince(lastRun) >= minimumInterval
-    }
-
     @MainActor
     static func runIfDue(_ ctx: ModelContext, engine: CloudKitSyncEngine?) async {
         // The Wallet automation launches the app in the background to run the quick-add
         // intent; a bank sync started there is suspended seconds later and shows up as an
         // "abandoned" run, having also burned the 15-minute window for the real foreground.
         guard UIApplication.shared.applicationState != .background else { return }
-        guard isDue(), !syncingBanks else { return }
+        guard CoreLogic.BankSyncThrottle().isDue(), !CoreLogic.BankSync.isRunning else { return }
         await syncAndRefresh(ctx, engine: engine)
     }
 
@@ -49,7 +29,7 @@ enum ForegroundBankSync {
     @MainActor @discardableResult
     static func syncAndRefresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?) async -> String {
         await withBackgroundTask("ForegroundBankSync") {
-            let banks = await syncBanksIfDue(ctx)
+            let banks = await CoreLogic.BankSync.runIfDue(in: ctx)
             // Independent of Enable Banking: brokers and crypto have their own sources, and an
             // unconfigured bank connection shouldn't stop them refreshing.
             let investments = await CoreLogic.InvestmentRefresh.run(in: ctx)
@@ -61,37 +41,12 @@ enum ForegroundBankSync {
         }
     }
 
-    // Only a sync that reached the banks and wasn't cut short uses up the 15 minutes: one that
-    // couldn't read the key (a locked phone) or was cancelled leaves the next caller to sync.
-    // The flag goes up before the first await, so two rapid foregrounds can't both start one.
-    @MainActor
-    private static func syncBanksIfDue(_ ctx: ModelContext) async -> CoreLogic.SyncSummary.Banks {
-        let connections = (try? ctx.fetch(FetchDescriptor<Connection>())) ?? []
-        guard connections.contains(where: { $0.connector == .enablebanking }) else {
-            // Nothing to sync counts as a run, so the foreground keeps its 15-minute pace.
-            lastRun = .now
-            return .notConnected
-        }
-        guard !syncingBanks else { return .busy }
-        guard isDue() else { return .recent }
-        let signer: EBJWTSigner
-        do {
-            signer = try EBKeychain().loadSigner()
-        } catch {
-            return .noKey(locked: error as? EBKeyError == .keychain(errSecInteractionNotAllowed))
-        }
-        syncingBanks = true
-        defer { syncingBanks = false }
-        let results = await CoreLogic.EBSync.syncAll(api: EBClient(tokenProvider: signer), in: ctx)
-        if !Task.isCancelled { lastRun = .now }
-        return .synced(CoreLogic.EBSync.report(results, in: ctx))
-    }
-
-    // Claude asked for it and the user (or an auto-apply switch) agreed: skip the throttle.
+    // Claude asked for it and the user (or an auto-apply switch) agreed: skip the throttle,
+    // but count the run against it.
     @MainActor
     static func runNow(_ ctx: ModelContext, connectionIds: [UUID]?) async {
         guard let signer = try? EBKeychain().loadSigner() else { return }
-        lastRun = .now
+        CoreLogic.BankSyncThrottle().record()
         let api = EBClient(tokenProvider: signer)
         await withBackgroundTask("ClaudeBankSync") {
             if let connectionIds {
