@@ -40,9 +40,14 @@ public enum BackgroundSync {
         try? BGTaskScheduler.shared.submit(request)
     }
 
-    public static func scheduleInvestments() {
+    // Every cold launch calls this, so a run already booked is kept rather than pushed later.
+    public static func scheduleInvestments() async {
+        let pending = await BGTaskScheduler.shared.pendingTaskRequests()
+        let booked = pending.contains { $0.identifier == investmentsTaskIdentifier }
+        guard let begin = CoreLogic.InvestmentRefresh.backgroundRunToBook(after: .now, alreadyBooked: booked)
+        else { return }
         let request = BGAppRefreshTaskRequest(identifier: investmentsTaskIdentifier)
-        request.earliestBeginDate = CoreLogic.InvestmentRefresh.nextBackgroundRun(after: .now)
+        request.earliestBeginDate = begin
         try? BGTaskScheduler.shared.submit(request)
     }
 
@@ -73,8 +78,9 @@ public enum BackgroundSync {
     private static func handleInvestments(task: BGTask, engine: CloudKitSyncEngine) {
         let box = TaskBox(task: task)
         let work = Task { @MainActor in
-            // First, so a run that expires still has the next one booked.
-            scheduleInvestments()
+            // First, so a run that expires still has the next one booked. This run's own request
+            // is no longer pending.
+            await scheduleInvestments()
             try? engine.start()
             await refreshInvestments(engine.modelContainer)
             await engine.sendPendingChanges()
@@ -118,7 +124,7 @@ public enum BackgroundSync {
 
     public static func schedule(earliestBeginIn seconds: TimeInterval = 3_600) {}
 
-    public static func scheduleInvestments() {}
+    public static func scheduleInvestments() async {}
 }
 
 #endif

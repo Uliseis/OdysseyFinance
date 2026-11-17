@@ -111,6 +111,14 @@ extension CoreLogic {
             return run
         }
 
+        // nil keeps the run already booked: booking again from a launch between midnight and
+        // 6:00 would push that morning's run to the next day.
+        public static func backgroundRunToBook(
+            after now: Date, alreadyBooked: Bool, timeZone: TimeZone = .current
+        ) -> Date? {
+            alreadyBooked ? nil : nextBackgroundRun(after: now, timeZone: timeZone)
+        }
+
         @MainActor
         private static func refreshAll(
             in ctx: ModelContext, keychain: any MarketKeys, crypto: any CryptoPriceSource,

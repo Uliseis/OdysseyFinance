@@ -217,6 +217,13 @@ final class InvestmentRefreshTests: XCTestCase {
                        "not straight after a run in the small hours")
     }
 
+    func testALaunchAfterMidnightKeepsTheMorningRunAlreadyBooked() {
+        // Booked the evening before for 6:00; booking again at 1:00 would skip to the day after.
+        XCTAssertNil(R.backgroundRunToBook(after: local(3, 13, 1), alreadyBooked: true, timeZone: madrid))
+        XCTAssertEqual(R.backgroundRunToBook(after: local(3, 13, 1), alreadyBooked: false, timeZone: madrid),
+                       local(3, 14, 6), "with nothing booked, the next run follows the usual rule")
+    }
+
     func testTheNextBackgroundRunStaysAtSixAcrossAClockChange() {
         // Summer time starts on the night of 30 to 31 March 2030, and ends on that of 26 to 27 October.
         XCTAssertEqual(R.nextBackgroundRun(after: local(3, 30, 20), timeZone: madrid), local(3, 31, 6))
