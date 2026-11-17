@@ -24,6 +24,8 @@ extension CoreLogic {
         static let txPageLimit = 50
         static let txLookbackDays = 730
         static let txIncrementalOverlapDays = 7
+        // A background task that runs out of time cancels the sync; the runs it cut short say so.
+        static let cutOff = "cut off: iOS stopped the sync before this bank finished"
 
         public struct PostProcess: Equatable, Sendable {
             public var fxBackfilled = 0
@@ -139,6 +141,9 @@ extension CoreLogic {
                             sessionAccount, connection: connection, api: api,
                             in: ctx, now: now, errors: &result.errors)
                         result.transactionsInserted += inserted.count
+                    } catch where isCutOff(error) {
+                        // The rest would be cut off too: the run is an error, not partial.
+                        throw error
                     } catch {
                         let label = sessionAccount.uid
                             ?? EBHelpers.iban(ofSession: sessionAccount)
@@ -465,8 +470,14 @@ extension CoreLogic {
         }
 
         private static func describe(_ error: Error) -> String {
+            if isCutOff(error) { return cutOff }
             if let eb = error as? EnableBankingError { return "\(eb.status) \(eb.body)" }
             return String(describing: error)
+        }
+
+        // URLSession answers a cancelled request with its own error.
+        private static func isCutOff(_ error: Error) -> Bool {
+            error is CancellationError || (error as? URLError)?.code == .cancelled
         }
 
         private static func jsonObject<T: Encodable>(_ value: T) -> Any? {

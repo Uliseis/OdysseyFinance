@@ -495,6 +495,47 @@ final class EBSyncTests: XCTestCase {
         XCTAssertEqual(first.status, .active)
     }
 
+    // iOS ending the time a sync was given cancels it. The run it cut short says so, rather than
+    // sitting as "running" until a later sync calls it abandoned.
+    func testARunCutShortAtTheBankIsRecordedAsCutOff() async throws {
+        for cancelled in [URLError(.cancelled), CancellationError()] as [any Error] {
+            let ctx = try S.makeContext()
+            let conn = makeConnection(ctx)
+            let api = StubAPI(session: makeSession())
+            api.sessionError = cancelled
+            let task = Task { await Sync.syncAll(api: api, in: ctx) }
+            api.whileSessionInFlight = { task.cancel() }
+
+            let results = await task.value
+
+            XCTAssertEqual(results.map(\.errors), [[Sync.cutOff]], "\(cancelled)")
+            let run = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SyncRun>()).first)
+            XCTAssertEqual(run.status, .error)
+            XCTAssertEqual(run.error, Sync.cutOff)
+            XCTAssertNotNil(run.finishedAt)
+            XCTAssertEqual(conn.lastError, Sync.cutOff)
+        }
+    }
+
+    func testARunCutShortBetweenAccountsIsAnErrorNotPartial() async throws {
+        let ctx = try S.makeContext()
+        let conn = makeConnection(ctx)
+        _ = makeLinkedAccount(ctx, connection: conn)
+        let api = StubAPI(session: makeSession())
+        api.details[Self.uid] = details()
+        api.txError = URLError(.cancelled)
+        let task = Task { await Sync.syncAll(api: api, in: ctx) }
+        api.whileSessionInFlight = { task.cancel() }
+
+        let results = await task.value
+
+        XCTAssertEqual(results.map(\.errors), [[Sync.cutOff]])
+        let run = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SyncRun>()).first)
+        XCTAssertEqual(run.status, .error)
+        XCTAssertEqual(run.error, Sync.cutOff)
+        XCTAssertNil(conn.lastSyncAt, "the next run fetches the window again")
+    }
+
     // A prior run that was suspended after saving its rows never post-processed them; the
     // next run must mirror them even though it inserts nothing itself.
     func testPostProcessCatchesUpRowsFromSuspendedRun() async throws {
