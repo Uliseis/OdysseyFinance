@@ -681,7 +681,7 @@ extension CoreLogic {
         private static func keyProblem(_ error: any Error, named key: String) -> String {
             switch error as? MarketKeyError {
             case .notFound: "add the \(key) in Settings"
-            case .keychain(errSecInteractionNotAllowed): "the \(key) can't be read while the iPhone is locked"
+            case .keychain(errSecInteractionNotAllowed): "the \(key) can't be read until the iPhone is unlocked after a restart"
             default: "the \(key) couldn't be read (\(error))"
             }
         }

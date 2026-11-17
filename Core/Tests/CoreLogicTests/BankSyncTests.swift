@@ -148,7 +148,7 @@ final class BankSyncTests: XCTestCase {
         XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.notFound),
                        "Add the Enable Banking key in Settings")
         XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.keychain(errSecInteractionNotAllowed)),
-                       "The bank key can't be read while the iPhone is locked")
+                       "The bank key can't be read until the iPhone is unlocked after a restart")
         XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.keychain(errSecAuthFailed)),
                        "The bank key couldn't be read (keychain(-25293))", "not a key to add again")
         XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.badPEM),

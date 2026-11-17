@@ -173,7 +173,7 @@ final class InvestmentRefreshTests: XCTestCase {
         try insertTrading212Account(ctx)
 
         let outcome = await R.run(in: ctx, keychain: StubKeys(t212: .keychain(errSecInteractionNotAllowed)))
-        XCTAssertEqual(outcome.failures, ["Trading 212: the API key can't be read while the iPhone is locked"])
+        XCTAssertEqual(outcome.failures, ["Trading 212: the API key can't be read until the iPhone is unlocked after a restart"])
     }
 
     @MainActor
