@@ -88,6 +88,28 @@ final class BankSyncTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(throttle.lastRun).timeIntervalSince(now), 0, accuracy: 0.001)
     }
 
+    // MARK: The foreground hook's own pace
+
+    func testTheForegroundRunAsAWholeWaitsAQuarterOfAnHour() {
+        let pace = CoreLogic.ForegroundSyncPace(defaults: defaults)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(pace.isDue(now: now))
+        pace.record(now)
+        XCTAssertFalse(pace.isDue(now: now.addingTimeInterval(14 * 60)))
+        XCTAssertTrue(pace.isDue(now: now.addingTimeInterval(15 * 60)))
+    }
+
+    // A run the bank key stopped marks no bank throttle; the hook's pace still closes.
+    func testTheForegroundPaceIsKeptApartFromTheBankThrottle() {
+        let pace = CoreLogic.ForegroundSyncPace(defaults: defaults)
+        pace.record()
+        XCTAssertTrue(throttle.isDue())
+        XCTAssertNil(throttle.lastRun)
+        defaults.removePersistentDomain(forName: suite)
+        throttle.record()
+        XCTAssertTrue(pace.isDue())
+    }
+
     // MARK: Running
 
     func testASyncThatReachedTheBanksUsesUpTheInterval() async throws {

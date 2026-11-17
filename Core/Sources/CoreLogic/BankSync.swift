@@ -50,6 +50,28 @@ extension CoreLogic {
         }
     }
 
+    // The foreground hook runs the banks, investments, the automations and a push. A run the
+    // bank key stopped marks no bank throttle, so the hook keeps its own pace too, or every
+    // return to the app (a Face ID prompt's included) would start it all again.
+    public struct ForegroundSyncPace {
+        static let lastRunKey = "ForegroundBankSync.lastAttemptAt"
+
+        private let defaults: UserDefaults
+
+        public init(defaults: UserDefaults = .standard) {
+            self.defaults = defaults
+        }
+
+        public func isDue(now: Date = .now) -> Bool {
+            let t = defaults.double(forKey: Self.lastRunKey)
+            return t == 0 || now.timeIntervalSince1970 - t >= BankSyncThrottle.interval
+        }
+
+        public func record(_ now: Date = .now) {
+            defaults.set(now.timeIntervalSince1970, forKey: Self.lastRunKey)
+        }
+    }
+
     public enum BankSync {
         // While a sync is out, so no second one starts over it.
         @MainActor public private(set) static var isRunning = false
