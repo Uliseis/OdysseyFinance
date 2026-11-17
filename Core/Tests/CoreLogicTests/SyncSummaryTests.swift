@@ -26,9 +26,10 @@ final class SyncSummaryTests: XCTestCase {
                        "Banks synced (2, 5 new transactions), investments refreshed (1).")
     }
 
+    // The last try may have failed at the bank, so a skip never claims the banks synced.
     func testBanksSkippedStillSaySo() {
         XCTAssertEqual(Summary.text(banks: .recent, investments: valued(2)),
-                       "Banks synced in the last 15 minutes, investments refreshed (2).")
+                       "Banks skipped (last tried under 15 minutes ago), investments refreshed (2).")
         XCTAssertEqual(Summary.text(banks: .busy, investments: valued(2)),
                        "Banks already syncing, investments refreshed (2).")
     }

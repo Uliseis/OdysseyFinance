@@ -7,7 +7,7 @@ extension CoreLogic {
         public enum Banks: Equatable, Sendable {
             // No Enable Banking connection, so nothing to say about banks.
             case notConnected
-            // Synced in the last 15 minutes.
+            // Tried in the last 15 minutes, whether or not the banks answered.
             case recent
             case busy
             // Why the bank key couldn't be read, in a sentence.
@@ -23,7 +23,7 @@ extension CoreLogic {
             case .notConnected:
                 break
             case .recent:
-                done.append("banks synced in the last 15 minutes")
+                done.append("banks skipped (last tried under 15 minutes ago)")
             case .busy:
                 done.append("banks already syncing")
             case .noKey(let problem):
