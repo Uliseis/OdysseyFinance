@@ -23,8 +23,8 @@ enum ForegroundBankSync {
         await syncAndRefresh(ctx, engine: engine)
     }
 
-    // The foreground hook and the Shortcuts action share this: banks unless they synced in the
-    // last 15 minutes, then investments, the automations that follow every sync, and a push.
+    // The foreground hook and the Shortcuts action share this: banks unless they were tried in
+    // the last 15 minutes, then investments, the automations that follow every sync, and a push.
     // Returns what it did in a line, for the action's answer.
     @MainActor @discardableResult
     static func syncAndRefresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?) async -> String {

@@ -10,7 +10,7 @@ import CoreSync
 struct SyncAndRefreshIntent: AppIntent {
     static let title: LocalizedStringResource = "Sync & Refresh"
     static let description = IntentDescription(
-        "Syncs your bank accounts and refreshes the value of investments priced live. Banks are skipped if they synced in the last 15 minutes.")
+        "Syncs your bank accounts and refreshes the value of investments priced live. Banks are skipped if they were tried in the last 15 minutes.")
     static let openAppWhenRun = false
 
     @Dependency private var container: ModelContainer
