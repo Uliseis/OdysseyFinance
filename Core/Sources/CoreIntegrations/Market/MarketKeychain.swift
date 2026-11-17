@@ -12,8 +12,9 @@ public protocol MarketKeys: Sendable {
     func loadEODHD() throws -> String
 }
 
-// Same storage shape as EBKeychain (iCloud-synced generic passwords, device-unlock gated,
-// biometrics provided by the app's Face ID gate) for the market-data API credentials.
+// Same storage shape as EBKeychain (iCloud-synced generic passwords, readable from the first
+// unlock after boot, biometrics provided by the app's Face ID gate) for the market-data API
+// credentials.
 public struct MarketKeychain: MarketKeys, Sendable {
     public let service: String
     public init(service: String = "com.uliseis.odysseyfinance.market") {
@@ -72,10 +73,7 @@ public struct MarketKeychain: MarketKeys, Sendable {
             kSecAttrSynchronizable: kCFBooleanTrue as Any,
         ]
         SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData] = Data(value.utf8)
-        add[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(KeyProtection.add(Data(value.utf8), to: base) as CFDictionary, nil)
         guard status == errSecSuccess else { throw MarketKeyError.keychain(status) }
     }
 
