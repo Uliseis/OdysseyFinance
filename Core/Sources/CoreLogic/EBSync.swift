@@ -240,6 +240,41 @@ extension CoreLogic {
             return out
         }
 
+        // A sync of every connection in a few words: how many synced cleanly, what came in, and
+        // each bank that needs the user, reconnections first. syncAll skips expired connections,
+        // so they're found by their status, not in the results.
+        public struct Report: Equatable, Sendable {
+            public var synced = 0
+            public var newTransactions = 0
+            public var problems: [String] = []
+        }
+
+        @MainActor
+        public static func report(_ results: [SyncResult], in ctx: ModelContext) -> Report {
+            let byConnection = Dictionary(results.map { ($0.connectionId, $0) }) { first, _ in first }
+            let connections = ((try? ctx.fetch(FetchDescriptor<Connection>())) ?? [])
+                .filter { $0.connector == .enablebanking }
+                .sorted { ($0.institutionName ?? "") < ($1.institutionName ?? "") }
+            var report = Report()
+            var failed: [String] = []
+            for connection in connections {
+                let name = connection.institutionName ?? "A bank"
+                let result = byConnection[connection.id]
+                report.newTransactions += result?.transactionsInserted ?? 0
+                if connection.status == .expired || connection.status == .revoked {
+                    report.problems.append("\(name) needs reconnecting in Settings")
+                } else if connection.sessionId == nil {
+                    continue  // a connection never finished has nothing to sync
+                } else if let result, !result.errors.isEmpty {
+                    failed.append("\(name) didn't sync; its connection in Settings shows why")
+                } else if result != nil {
+                    report.synced += 1
+                }
+            }
+            report.problems += failed
+            return report
+        }
+
         public enum SyncError: Swift.Error, Equatable {
             case notEnableBanking
             case noSession
