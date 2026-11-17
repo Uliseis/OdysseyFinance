@@ -99,8 +99,8 @@ public enum BackgroundSync {
     // Pull bank transactions before the CloudKit push so new ones ride out the same run.
     // Writes to mainContext → SaveObserver enqueues the inserts for push. Dedupe is on
     // (accountId, externalId) in EBSync, so replays insert nothing.
-    // ponytail: try? skips silently when the key is absent or unreadable (device locked,
-    // AccessibleWhenUnlocked) — it just syncs on the next unlocked run.
+    // ponytail: try? skips silently when the key is absent or unreadable (not yet unlocked
+    // since boot) — it just syncs on the next run that can read it.
     @MainActor
     private static func syncEnableBanking(_ container: ModelContainer) async {
         guard let signer = try? EBKeychain().loadSigner() else { return }

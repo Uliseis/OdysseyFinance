@@ -54,7 +54,7 @@ public enum EBRSAKey {
 // iCloud-synced (choice C): kSecAttrSynchronizable so the key follows the user's Apple
 // account across devices. A per-item biometric SecAccessControl is incompatible with
 // synchronizable items, so biometric protection is provided by the app's Face ID gate
-// at launch; the item itself is gated by device unlock (kSecAttrAccessibleWhenUnlocked).
+// at launch; the item itself is readable from the first unlock after boot (D18).
 public struct EBKeychain: Sendable {
     public let service: String
     public init(service: String = "com.uliseis.odysseyfinance.enablebanking") {
@@ -99,10 +99,7 @@ public struct EBKeychain: Sendable {
             kSecAttrSynchronizable: kCFBooleanTrue as Any,
         ]
         SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData] = data
-        add[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(KeyProtection.add(data, to: base) as CFDictionary, nil)
         guard status == errSecSuccess else { throw EBKeyError.keychain(status) }
     }
 

@@ -1,9 +1,12 @@
 import SwiftUI
 import SwiftData
+import Security
+import UIKit
 import AppIntents
 import UserNotifications
 import CoreModel
 import CoreLogic
+import CoreIntegrations
 import CoreSync
 
 private let iCloudContainerID = "iCloud.com.uliseis.odysseyfinance"
@@ -85,6 +88,7 @@ struct OdysseyFinanceApp: App {
             RootView()
                 .environment(syncEngine)
                 .task {
+                    upgradeKeyProtection()
                     // CKContainer init traps without the iCloud entitlement (unsigned dev
                     // builds). Only start sync when CloudKit is actually provisioned; the app
                     // runs fully locally otherwise.
@@ -145,6 +149,16 @@ struct OdysseyFinanceApp: App {
     }
 }
 
+// D18: keys saved before were readable only while unlocked. Re-protecting one needs the phone
+// unlocked, so a background launch while it's locked leaves it to the next foreground; once
+// every key is upgraded this only reads attributes.
+@MainActor
+private func upgradeKeyProtection() {
+    guard UIApplication.shared.isProtectedDataAvailable else { return }
+    let status = KeyProtection.upgradeSavedKeys()
+    if status != errSecSuccess { print("Key protection upgrade failed: \(status)") }
+}
+
 // DEBUG-only screenshot/UI-test hook: launch with UITEST_DISABLE_AUTH=1 to skip the
 // biometric gate. Never compiled into release builds.
 #if DEBUG
@@ -201,6 +215,7 @@ struct RootView: View {
                 // Refresh bank data on every foreground (throttled). The BGProcessingTask alone
                 // left the app showing stale transactions until Connections was tapped by hand.
                 if phase == .active {
+                    upgradeKeyProtection()
                     Task {
                         await ForegroundBankSync.runIfDue(modelContext, engine: syncEngine)
                         await ClaudeBridge.exchange(modelContext)

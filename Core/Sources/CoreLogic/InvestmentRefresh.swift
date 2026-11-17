@@ -668,8 +668,8 @@ extension CoreLogic {
             "\(n) \(noun)\(n == 1 ? "" : "s")"
         }
 
-        // The keys can be read only while the phone is unlocked, and a background run often
-        // finds it locked: asking for the key again wouldn't help then.
+        // The keys can't be read until the phone is unlocked once after boot, which a background
+        // run may hit: asking for the key again wouldn't help then.
         private static func keyProblem(_ error: any Error, named key: String) -> String {
             switch error as? MarketKeyError {
             case .notFound: "add the \(key) in Settings"
