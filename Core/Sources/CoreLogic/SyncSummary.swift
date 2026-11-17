@@ -10,7 +10,8 @@ extension CoreLogic {
             // Synced in the last 15 minutes.
             case recent
             case busy
-            case noKey(locked: Bool)
+            // Why the bank key couldn't be read, in a sentence.
+            case noKey(String)
             case synced(EBSync.Report)
         }
 
@@ -25,10 +26,8 @@ extension CoreLogic {
                 done.append("banks synced in the last 15 minutes")
             case .busy:
                 done.append("banks already syncing")
-            case .noKey(let locked):
-                problems += ["Banks not synced", locked
-                    ? "The bank key can't be read while the iPhone is locked"
-                    : "Add the Enable Banking key in Settings"]
+            case .noKey(let problem):
+                problems += ["Banks not synced", problem]
             case .synced(let report):
                 if report.synced > 0 {
                     let new = report.newTransactions > 0 ? ", \(count(report.newTransactions, "new transaction"))" : ""

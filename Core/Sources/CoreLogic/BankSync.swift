@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftData
 import CoreModel
 import CoreIntegrations
@@ -74,7 +75,7 @@ extension CoreLogic {
             do {
                 api = try makeAPI()
             } catch {
-                return .noKey(locked: error as? EBKeyError == .keychain(errSecInteractionNotAllowed))
+                return .noKey(keyProblem(error))
             }
             isRunning = true
             defer { isRunning = false }
@@ -82,6 +83,15 @@ extension CoreLogic {
             let results = await EBSync.syncAll(api: api, in: ctx)
             if !Task.isCancelled { throttle.record() }
             return .synced(EBSync.report(results, in: ctx))
+        }
+
+        // Worded like the investments' key problems: only a key that isn't there needs adding.
+        static func keyProblem(_ error: any Error) -> String {
+            switch error as? EBKeyError {
+            case .notFound: "Add the Enable Banking key in Settings"
+            case .keychain(errSecInteractionNotAllowed): "The bank key can't be read while the iPhone is locked"
+            default: "The bank key couldn't be read (\(error))"
+            }
         }
     }
 }

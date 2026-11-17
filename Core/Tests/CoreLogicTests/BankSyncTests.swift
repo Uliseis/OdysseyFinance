@@ -139,9 +139,20 @@ final class BankSyncTests: XCTestCase {
     func testAKeyThatCantBeReadLeavesTheSyncToTheNextCaller() async throws {
         let ctx = try connectedContext()
         let banks = await CoreLogic.BankSync.runIfDue(in: ctx, throttle: throttle, api: { throw EBKeyError.notFound })
-        guard case .noKey = banks else { return XCTFail("expected noKey, got \(banks)") }
+        XCTAssertEqual(banks, .noKey("Add the Enable Banking key in Settings"))
         XCTAssertNil(throttle.lastRun)
         XCTAssertTrue(throttle.isDue())
+    }
+
+    func testAKeyThatCantBeReadSaysWhy() {
+        XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.notFound),
+                       "Add the Enable Banking key in Settings")
+        XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.keychain(errSecInteractionNotAllowed)),
+                       "The bank key can't be read while the iPhone is locked")
+        XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.keychain(errSecAuthFailed)),
+                       "The bank key couldn't be read (keychain(-25293))", "not a key to add again")
+        XCTAssertEqual(CoreLogic.BankSync.keyProblem(EBKeyError.badPEM),
+                       "The bank key couldn't be read (badPEM)")
     }
 
     func testACancelledSyncLeavesTheSyncToTheNextCaller() async throws {
