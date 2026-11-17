@@ -1,7 +1,7 @@
 import XCTest
 import SwiftData
 import CoreModel
-import CoreIntegrations
+@testable import CoreIntegrations
 @testable import CoreLogic
 
 final class InvestmentRefreshTests: XCTestCase {
@@ -142,6 +142,97 @@ final class InvestmentRefreshTests: XCTestCase {
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all[0].marketValueEur, 51_000)
     }
+
+    @MainActor
+    func testOutcomeCountsTheLiveAccountsItLookedAt() async throws {
+        let ctx = try S.makeContext()
+        let none = await R.run(in: ctx, crypto: StubPrices([:]))
+        XCTAssertEqual(none.liveAccounts, 0, "nothing to refresh")
+
+        ctx.insert(Account(
+            externalId: "x", type: .broker, institution: "R", name: "Crypto", currency: "EUR",
+            liveValueSource: "crypto:bitcoin", assetQuantity: 1))
+        try ctx.save()
+        let one = await R.run(in: ctx, crypto: StubPrices(["bitcoin": 50_000]))
+        XCTAssertEqual(one.liveAccounts, 1)
+    }
+
+    @MainActor
+    func testAMissingTrading212KeyIsSaidInPlainWords() async throws {
+        let ctx = try S.makeContext()
+        try insertTrading212Account(ctx)
+
+        let outcome = await R.run(in: ctx, keychain: StubKeys(t212: .notFound))
+        XCTAssertEqual(outcome.failures, ["Trading 212: add the API key in Settings"])
+    }
+
+    // The keys can be read only while the phone is unlocked, which in the background it often isn't.
+    @MainActor
+    func testALockedKeychainIsSaidInPlainWords() async throws {
+        let ctx = try S.makeContext()
+        try insertTrading212Account(ctx)
+
+        let outcome = await R.run(in: ctx, keychain: StubKeys(t212: .keychain(errSecInteractionNotAllowed)))
+        XCTAssertEqual(outcome.failures, ["Trading 212: the API key can't be read while the iPhone is locked"])
+    }
+
+    @MainActor
+    func testACryptoRateLimitIsSaidInPlainWords() async throws {
+        let ctx = try S.makeContext()
+        ctx.insert(Account(
+            externalId: "x", type: .broker, institution: "R", name: "Crypto", currency: "EUR",
+            liveValueSource: "crypto:bitcoin", assetQuantity: 1))
+        try ctx.save()
+
+        let outcome = await R.run(in: ctx, crypto: FailingPrices(error: CryptoPriceError(status: 429, body: "{}")))
+        XCTAssertEqual(outcome.failures, ["Crypto prices: rate limited, try again later"])
+    }
+
+    @MainActor
+    private func insertTrading212Account(_ ctx: ModelContext) throws {
+        ctx.insert(Account(
+            externalId: "t", type: .broker, institution: "T", name: "Broker", currency: "EUR",
+            liveValueSource: R.trading212Source))
+        try ctx.save()
+    }
+
+    // MARK: - Background schedule
+
+    private let madrid = TimeZone(identifier: "Europe/Madrid")!
+
+    private func local(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = madrid
+        return cal.date(from: DateComponents(year: 2030, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    func testTheNextBackgroundRunIsTheFirstSixInTheMorningAtLeastSixHoursAway() {
+        XCTAssertEqual(R.nextBackgroundRun(after: local(3, 12, 22), timeZone: madrid), local(3, 13, 6),
+                       "an evening run books the next morning")
+        XCTAssertEqual(R.nextBackgroundRun(after: local(3, 12, 0), timeZone: madrid), local(3, 12, 6),
+                       "exactly six hours away still counts")
+        XCTAssertEqual(R.nextBackgroundRun(after: local(3, 12, 7, 30), timeZone: madrid), local(3, 13, 6),
+                       "a morning run books tomorrow's")
+        XCTAssertEqual(R.nextBackgroundRun(after: local(3, 12, 3), timeZone: madrid), local(3, 13, 6),
+                       "not straight after a run in the small hours")
+    }
+
+    func testTheNextBackgroundRunStaysAtSixAcrossAClockChange() {
+        // Summer time starts on the night of 30 to 31 March 2030, and ends on that of 26 to 27 October.
+        XCTAssertEqual(R.nextBackgroundRun(after: local(3, 30, 20), timeZone: madrid), local(3, 31, 6))
+        XCTAssertEqual(R.nextBackgroundRun(after: local(10, 26, 22), timeZone: madrid), local(10, 27, 6))
+    }
+}
+
+private struct FailingPrices: CryptoPriceSource {
+    let error: any Error
+    func prices(for coinIds: [String]) async throws -> [String: Decimal] { throw error }
+}
+
+private struct StubKeys: MarketKeys {
+    let t212: MarketKeyError
+    func loadTrading212() throws -> Trading212Credentials { throw t212 }
+    func loadEODHD() throws -> String { throw MarketKeyError.notFound }
 }
 
 // Serves canned prices instead of hitting CoinGecko.
