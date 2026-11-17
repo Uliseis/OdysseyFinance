@@ -392,8 +392,11 @@ public enum BridgeExecutor {
                                          before: archived ? "active" : "archived", after: archived ? "archived" : "active")]
             step.undo = [.archiveAccount(accountId: accountId, archived: !archived)]
             step.message = archived ? "Hidden from lists and totals; its bank no longer syncs it" : "Back in lists and totals"
+            // Unarchiving brings back route mirrors but not detected or hand-made pairs.
             if let impact, !impact.isEmpty {
-                step.message += ". \(impact.summary) \(toCents(impact.totalEur)) EUR in all."
+                step.undo = nil
+                step.message += ". \(impact.summary) \(toCents(impact.totalEur)) EUR in all. "
+                    + "Permanent: no Undo, since unarchiving won't re-pair them all."
             }
 
         case .importFundOrders(let accountId, let ordersCsv, let movementsCsv, let heldUnits):
