@@ -84,13 +84,16 @@ final class FundPriceRefreshTests: XCTestCase {
 
         XCTAssertEqual(outcome.updated, [acc.id])
         XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (12 Mar)."])
         let v = try XCTUnwrap(valuations(acc, ctx).last)
-        XCTAssertEqual(v.marketValueEur, d("108.0082"), "10 × 7.4321 + 4 × 2.0468 + 25.50")
+        XCTAssertEqual(v.marketValueEur, d("108.01"), "10 × 7.4321 + 4 × 2.0468 + 25.50, in cents")
         XCTAssertEqual(v.cashValueEur, d("25.5"))
         XCTAssertEqual(v.notes, "auto: funds")
+        XCTAssertEqual(v.asOf, day(12), "dated by the prices, not the refresh")
         XCTAssertEqual(source.latests, [a, b], "nothing fetched for the sold-out fund")
         XCTAssertEqual(cache.cache.funds[a], Entry(
-            name: "Example Fund A", currency: "EUR", price: d("7.4321"), priceDay: day(12), fetchedDay: day(13)))
+            name: "Example Fund A", currency: "EUR", price: d("7.4321"), priceDay: day(12), fetchedDay: day(13),
+            history: [.init(date: day(12), priceEur: d("7.4321"))]))
         XCTAssertEqual(cache.cache.requestDay, day(13))
         XCTAssertEqual(cache.cache.requestCount, 4, "two lookups and two prices")
     }
@@ -105,7 +108,9 @@ final class FundPriceRefreshTests: XCTestCase {
 
         XCTAssertEqual(source.lookups, lookups)
         XCTAssertEqual(source.latests, latests)
-        XCTAssertEqual(outcome.updated, [acc.id])
+        XCTAssertEqual(outcome.updated, [])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: no new prices since 12 Mar."])
         XCTAssertEqual(try valuations(acc, ctx).count, 1)
         XCTAssertEqual(cache.cache.requestCount, 4)
     }
@@ -143,8 +148,7 @@ final class FundPriceRefreshTests: XCTestCase {
 
         XCTAssertEqual(outcome.updated, [acc.id])
         XCTAssertEqual(outcome.failures, [])
-        XCTAssertEqual(outcome.notices.count, 1, "\(outcome.notices)")
-        XCTAssertTrue(outcome.notices[0].contains("weren't cached"), outcome.notices[0])
+        XCTAssertEqual(outcome.notices.filter { $0.contains("weren't cached") }.count, 1, "\(outcome.notices)")
     }
 
     func testNameAndCurrencyAreLookedUpOnce() async throws {
@@ -178,9 +182,10 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(cache.cache.requestCount, R.fundRequestsPerDay)
         XCTAssertEqual(cache.cache.funds[b]?.price, d("2.05"), "B keeps its cached price")
         XCTAssertEqual(outcome.updated, [acc.id], "a cached price a day old still values the account")
-        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("108.021"), "10 × 7.4321 + 4 × 2.05 + 25.50")
+        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("108.02"), "10 × 7.4321 + 4 × 2.05 + 25.50")
         XCTAssertEqual(outcome.failures, [], "a value saved from a cached price is no failure")
-        XCTAssertEqual(outcome.notices.count, 1)
+        XCTAssertEqual(outcome.notices.count, 2, "\(outcome.notices)")
+        XCTAssertEqual(outcome.notices[1], "Funds: values recorded for 1 day (12 Mar).")
         XCTAssertTrue(outcome.notices[0].contains("Example Fund B"), outcome.notices[0])
         XCTAssertTrue(outcome.notices[0].contains("no EODHD requests left today"), outcome.notices[0])
         XCTAssertFalse(outcome.notices[0].contains("Example Fund A"), outcome.notices[0])
@@ -230,9 +235,10 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(replaced.requestCount, 4)
         XCTAssertEqual(replaced.funds[a]?.price, d("7.4321"))
         XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
-        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("108.0082"))
+        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("108.01"))
         XCTAssertEqual(outcome.notices,
-                       ["The fund price cache couldn't be read; it starts again from the prices fetched now."])
+                       ["The fund price cache couldn't be read; it starts again from the prices fetched now.",
+                        "Funds: values recorded for 1 day (12 Mar)."])
     }
 
     func testAnUnreadableCacheOfUnknownAgeMakesNoRequests() async throws {
@@ -425,6 +431,7 @@ final class FundPriceRefreshTests: XCTestCase {
         source.quotes[b] = FundQuote(isin: b, day: day(12), price: d("2.3"), currency: "EUR")
     }
 
+    // Values stop at the day before the refused price: B's newer price waits for A's.
     func testAJumpOverFifteenPercentIsRefusedAndHeldUntilConfirmed() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
@@ -432,11 +439,14 @@ final class FundPriceRefreshTests: XCTestCase {
 
         let outcome = await run(ctx)
 
-        XCTAssertTrue(outcome.updated.isEmpty)
+        XCTAssertEqual(outcome.updated, [acc.id])
         XCTAssertEqual(outcome.failures.count, 1)
         XCTAssertTrue(outcome.failures[0].contains("Example Fund A: new price awaiting confirmation"), outcome.failures[0])
         XCTAssertTrue(outcome.failures[0].contains("15%"), outcome.failures[0])
-        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+        XCTAssertTrue(outcome.failures[0].contains("no value after 11 Mar"), outcome.failures[0])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(11)])
+        XCTAssertEqual(values.map(\.marketValueEur), [d("108.01")], "10 × 7.4321 + 4 × 2.0468 + 25.50: both of the 11th")
         let a2 = try XCTUnwrap(cache.cache.funds[a])
         XCTAssertEqual([a2.price, a2.previousPrice], [oldA.price, oldA.previousPrice])
         XCTAssertEqual(a2.priceDay, day(11))
@@ -456,13 +466,14 @@ final class FundPriceRefreshTests: XCTestCase {
         let second = await run(ctx, at: now.addingTimeInterval(8 * 3600))
 
         for outcome in [first, second] {
-            XCTAssertTrue(outcome.updated.isEmpty)
             XCTAssertEqual(outcome.failures.count, 1)
             XCTAssertTrue(outcome.failures.first?.contains("Example Fund A: new price awaiting confirmation") == true,
                           "\(outcome.failures)")
         }
+        XCTAssertEqual(second.updated, [])
+        XCTAssertEqual(second.notices, ["Funds: no new prices since 11 Mar."])
         XCTAssertEqual(source.latests, [a, b], "the second run fetches nothing")
-        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+        XCTAssertEqual(try valuations(acc, ctx).map(\.asOf), [day(11)])
     }
 
     func testTheSameRefusedNavFetchedAgainIsNoConfirmation() async throws {
@@ -477,7 +488,7 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertTrue(outcome.updated.isEmpty)
         XCTAssertTrue(outcome.failures.first?.contains("awaiting confirmation") == true, "\(outcome.failures)")
         XCTAssertEqual(cache.cache.funds[a]?.pendingDay, day(12))
-        XCTAssertEqual(try valuations(acc, ctx).count, 0)
+        XCTAssertEqual(try valuations(acc, ctx).map(\.asOf), [day(11)])
     }
 
     func testALaterDayAgreeingWithARefusedJumpConfirmsIt() async throws {
@@ -491,11 +502,15 @@ final class FundPriceRefreshTests: XCTestCase {
 
         XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
         XCTAssertEqual(outcome.failures, [])
-        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("121.7"), "10 × 8.7 + 4 × 2.3 + 25.50")
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(11), day(12), day(13)])
+        XCTAssertEqual(values.map(\.marketValueEur).suffix(2), [d("120.7"), d("121.7")],
+                       "10 × 8.6 + 4 × 2.3 + 25.50 on the 12th: the confirmed price values its own day")
         let a2 = try XCTUnwrap(cache.cache.funds[a])
         XCTAssertEqual(a2.price, d("8.7"))
         XCTAssertEqual(a2.priceDay, day(13))
         XCTAssertEqual(a2.previousPrice, d("8.6"), "the confirmed price is the day before")
+        XCTAssertEqual(a2.history.map(\.priceEur), [d("7.4321"), d("8.6"), d("8.7")])
         XCTAssertNil(a2.pendingPrice)
         XCTAssertNil(a2.pendingDay)
     }
@@ -510,10 +525,12 @@ final class FundPriceRefreshTests: XCTestCase {
         let outcome = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
 
         XCTAssertEqual(outcome.updated, [acc.id], "\(outcome.failures)")
-        XCTAssertEqual(try valuations(acc, ctx).last?.marketValueEur, d("109.2"), "10 × 7.45 + 4 × 2.3 + 25.50")
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [d("108.01"), d("109.02"), d("109.2")],
+                       "the dropped price never values a day: the 12th takes A's price of the 11th")
         let a2 = try XCTUnwrap(cache.cache.funds[a])
         XCTAssertEqual(a2.price, d("7.45"))
         XCTAssertEqual(a2.previousPrice, d("7.4321"))
+        XCTAssertEqual(a2.history.map(\.date), [day(11), day(13)])
         XCTAssertNil(a2.pendingPrice)
         XCTAssertNil(a2.pendingDay)
     }
@@ -623,10 +640,255 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(try valuations(acc, ctx).count, 0)
     }
 
+    // MARK: - Dated values and gaps
+
+    private func prices(_ isin: String, _ rows: [(Int, String)], month: Int = 3) -> [FundQuote] {
+        rows.map { FundQuote(isin: isin, day: day($0.0, month: month), price: d($0.1), currency: "EUR") }
+    }
+
+    private func value(_ acc: Account, _ ctx: ModelContext, on dd: Int, _ eur: String) throws {
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(dd).addingTimeInterval(22 * 3600), marketValueEur: d(eur)))
+        try ctx.save()
+    }
+
+    // Last valued on Monday the 4th, run on Tuesday the 12th with prices up to Monday the 11th.
+    // 100 paid in on Wednesday the 6th, 2 more units of A bought for 15 on Thursday the 7th.
+    func testAGapIsFilledWithOneValuePerWeekdayFromTheUnitsAndCashOfEachDay() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try value(acc, ctx, on: 4, "100")
+        _ = S.makeTx(ctx, account: acc, amount: 100, direction: .credit, bookedAt: day(6), isTransfer: true)
+        ctx.insert(FundTrade(account: acc, isin: a, tradeDate: day(7), side: .buy, units: 2, amountEur: 15))
+        try ctx.save()
+        source.series[a] = prices(a, [(4, "7"), (5, "7.1"), (6, "7.2"), (7, "7.3"), (8, "7.4"), (11, "7.5")])
+        source.series[b] = prices(b, [(4, "2"), (5, "2.01"), (6, "2.02"), (7, "2.03"), (8, "2.04"), (11, "2.05")])
+
+        let outcome = await run(ctx, at: day(12).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.updated, [acc.id])
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 5 days (5–11 Mar)."])
+        let auto = try valuations(acc, ctx).dropFirst()
+        XCTAssertEqual(auto.map(\.asOf), [day(5), day(6), day(7), day(8), day(11)], "no weekend")
+        XCTAssertEqual(auto.map(\.marketValueEur), [d("104.54"), d("205.58"), d("206.22"), d("207.46"), d("208.7")],
+                       "10 × A + 4 × B + cash; 12 units of A from the 7th")
+        XCTAssertEqual(auto.map(\.cashValueEur), [d("25.5"), d("125.5"), d("110.5"), d("110.5"), d("110.5")])
+        XCTAssertEqual(Set(auto.map(\.notes)), ["auto: funds"])
+        XCTAssertEqual(source.sinces, [a: day(25, month: 2), b: day(25, month: 2)], "from a week before the last value")
+        XCTAssertEqual(cache.cache.funds[a]?.history.count, 6)
+    }
+
+    func testFundsWithDifferentNewestDaysValueTheNewestDayWithEachOnesLatestPrice() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try value(acc, ctx, on: 11, "100")
+        source.series[a] = prices(a, [(11, "7.3"), (12, "7.4"), (13, "7.5")])
+        source.series[b] = prices(b, [(11, "2"), (12, "2.05")])
+
+        let outcome = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 2 days (12–13 Mar)."])
+        let auto = try valuations(acc, ctx).dropFirst()
+        XCTAssertEqual(auto.map(\.asOf), [day(12), day(13)])
+        XCTAssertEqual(auto.map(\.marketValueEur), [d("107.7"), d("108.7")], "the 13th takes B's price of the 12th")
+    }
+
+    func testADayWithAFundPricedNoLaterThanAWeekBeforeIsLeftOutAndNamed() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try value(acc, ctx, on: 1, "100")
+        source.series[a] = prices(a, [(1, "7"), (4, "7"), (5, "7"), (6, "7"), (7, "7"), (8, "7"), (11, "7"), (12, "7"), (13, "7")])
+        source.series[b] = prices(b, [(1, "2"), (4, "2"), (13, "2")])
+
+        let outcome = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(try valuations(acc, ctx).dropFirst().map(\.asOf),
+                       [day(4), day(5), day(6), day(7), day(8), day(11), day(13)])
+        XCTAssertEqual(outcome.failures,
+                       ["Funds: 1 day not valued (12 Mar): no price in the week before for Example Fund B."])
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 7 days (4–13 Mar)."])
+    }
+
+    // A is priced from Monday the 11th at a level 20% up; the series stops at Friday the 8th
+    // and the newest price waits for a later day's.
+    func testAMoveOverFifteenPercentInsideTheSeriesStopsTheValuesBeforeIt() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try value(acc, ctx, on: 7, "100")
+        let moved: [(Int, String)] = [(7, "7"), (8, "7.1"), (11, "8.5"), (12, "8.6")]
+        source.series[a] = prices(a, moved)
+        source.series[b] = prices(b, [(7, "2"), (8, "2"), (11, "2"), (12, "2")])
+
+        let first = await run(ctx)
+
+        XCTAssertEqual(try valuations(acc, ctx).dropFirst().map(\.asOf), [day(8)])
+        XCTAssertEqual(first.failures.count, 1)
+        XCTAssertTrue(first.failures[0].contains("Example Fund A: new price awaiting confirmation"), first.failures[0])
+        XCTAssertEqual(cache.cache.funds[a]?.priceDay, day(8))
+        XCTAssertEqual(cache.cache.funds[a]?.pendingDay, day(12))
+
+        // A later day at the new level confirms the move and the days leading up to it.
+        source.series[a] = prices(a, moved + [(13, "8.7")])
+        source.series[b] = prices(b, [(7, "2"), (8, "2"), (11, "2"), (12, "2"), (13, "2")])
+        let second = await run(ctx, at: day(14).addingTimeInterval(9 * 3600))
+
+        XCTAssertEqual(second.failures, [])
+        let auto = try valuations(acc, ctx).dropFirst()
+        XCTAssertEqual(auto.map(\.asOf), [day(8), day(11), day(12), day(13)])
+        XCTAssertEqual(auto.map(\.marketValueEur), [d("104.5"), d("118.5"), d("119.5"), d("120.5")])
+    }
+
+    func testAValueAlreadyOnTheNewestPriceDayIsReplacedOnlyWhenItDiffers() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try value(acc, ctx, on: 12, "99")
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (12 Mar)."])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.count, 1)
+        XCTAssertEqual(values[0].marketValueEur, d("108.01"))
+        XCTAssertEqual(values[0].asOf, day(12))
+        XCTAssertEqual(values[0].notes, "auto: funds")
+    }
+
+    func testAValueDatedAfterTheNewestPricesIsLeftAlone() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        // Written by a refresh that dated values by the time it ran.
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(13).addingTimeInterval(3600), marketValueEur: 108, notes: "auto: funds"))
+        try ctx.save()
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.updated, [])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: no new prices since 13 Mar."])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [108])
+    }
+
+    func testAGapLongerThanTheCapFillsOnlyTheLatestDaysAndSaysSo() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let lastValued = cal.date(from: DateComponents(year: 2029, month: 11, day: 26))!
+        ctx.insert(PortfolioValuation(account: acc, asOf: lastValued.addingTimeInterval(20 * 3600), marketValueEur: 100))
+        try ctx.save()
+        let days = stride(from: lastValued, through: day(12), by: 86_400).filter { !cal.isDateInWeekend($0) }
+        source.series[a] = days.map { FundQuote(isin: a, day: $0, price: 7, currency: "EUR") }
+        source.series[b] = days.map { FundQuote(isin: b, day: $0, price: 2, currency: "EUR") }
+        // Held from 6 to 20 February.
+        source.infos[c] = FundInfo(isin: c, name: "Example Fund C", currency: "EUR")
+        source.series[c] = days.map { FundQuote(isin: c, day: $0, price: 10, currency: "EUR") }
+
+        let outcome = await run(ctx)
+
+        let auto = try valuations(acc, ctx).dropFirst()
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(source.latests, [a, b, c], "a fund sold since the last value still values the days it was held")
+        XCTAssertEqual(auto.count, R.fundGapDays)
+        XCTAssertEqual(auto.first?.asOf, cal.date(from: DateComponents(year: 2029, month: 12, day: 19)))
+        XCTAssertEqual(auto.last?.asOf, day(12))
+        XCTAssertEqual(source.sinces[a], cal.date(from: DateComponents(year: 2029, month: 11, day: 19)))
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 60 days (19 Dec 2029 – 12 Mar 2030).",
+            "Funds: the gap since 26 Nov is longer than 60 weekdays; only the latest 60 were filled.",
+        ])
+    }
+
+    func testDailyPricesAreKeptFromTwoWeeksBackOrTheRequestsStartButNoMoreThan400Days() {
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let today = day(13)
+        XCTAssertEqual(R.dailyPricesKept(since: nil, today: today), day(27, month: 2))
+        XCTAssertEqual(R.dailyPricesKept(since: day(4), today: today), day(27, month: 2))
+        XCTAssertEqual(R.dailyPricesKept(since: day(2, month: 1), today: today), day(2, month: 1))
+        XCTAssertEqual(R.dailyPricesKept(since: cal.date(byAdding: .year, value: -2, to: today), today: today),
+                       cal.date(byAdding: .day, value: -400, to: today))
+    }
+
+    func testDailyPricesOlderThanNeededLeaveTheCache() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        cache.cache.funds[a] = Entry(name: "Example Fund A", currency: "EUR", price: d("7.3"), priceDay: day(11),
+                                     fetchedDay: day(11), history: [.init(date: Date(timeIntervalSince1970: 0), priceEur: 1),
+                                                                    .init(date: day(11), priceEur: d("7.3"))])
+
+        _ = await run(ctx)
+
+        XCTAssertEqual(cache.cache.funds[a]?.history.map(\.date), [day(11), day(12)])
+    }
+
+    func testValuesAreInCents() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx, cashAnchor: d("25.505"))
+        source.quotes[a] = FundQuote(isin: a, day: day(12), price: d("7.43215"), currency: "EUR")
+
+        _ = await run(ctx)
+
+        let v = try XCTUnwrap(valuations(acc, ctx).last)
+        XCTAssertEqual(v.marketValueEur, d("108.01"), "74.3215 + 8.1872 + 25.505 is 108.0137")
+        XCTAssertEqual(v.cashValueEur, d("25.51"))
+    }
+
+    func testCryptoStillRecordsTheRefreshTimeWithItsUnroundedValue() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        let coin = Account(externalId: "c", type: .broker, institution: "R", name: "Crypto", currency: "EUR",
+                           liveValueSource: "crypto:bitcoin", assetQuantity: d("0.0512345"))
+        ctx.insert(coin)
+        try ctx.save()
+        let source = self.source!
+
+        let outcome = await R.run(in: ctx, keychain: keys!, crypto: StubCoins(price: d("60000.123")),
+                                  fundPrices: { _ in source }, fundPriceCache: cache, now: now)
+
+        XCTAssertTrue(outcome.updated.contains(coin.id))
+        let v = try XCTUnwrap(valuations(coin, ctx).last)
+        XCTAssertEqual(v.asOf, now)
+        XCTAssertEqual(v.marketValueEur, d("0.0512345") * d("60000.123"))
+        XCTAssertEqual(v.notes, "auto: crypto:bitcoin")
+    }
+
+    // A value dated by its prices is no longer read today, so money paid in after it is added
+    // on top, and only until a value that includes it.
+    func testMoneyPaidInAfterTheValuesDayCountsOnce() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        _ = await run(ctx)
+        // Booked mid-morning on the 13th, after the value of the 12th.
+        _ = S.makeTx(ctx, account: acc, amount: 100, direction: .credit,
+                     bookedAt: day(13).addingTimeInterval(10 * 3600), isTransfer: true)
+        try ctx.save()
+        func metrics(at time: Date) throws -> CoreLogic.Investments.AccountMetrics? {
+            CoreLogic.Investments.computeAccountMetrics(
+                bases: [CoreLogic.Investments.basis(for: acc)],
+                valuations: try valuations(acc, ctx),
+                legs: try CoreLogic.Investments.listContributionLegs(for: [acc.id], in: ctx),
+                now: time)[acc.id]
+        }
+
+        XCTAssertEqual(try metrics(at: now.addingTimeInterval(8 * 3600))?.valueEur, d("208.01"))
+
+        source.quotes[a] = FundQuote(isin: a, day: day(13), price: d("7.4321"), currency: "EUR")
+        source.quotes[b] = FundQuote(isin: b, day: day(13), price: d("2.0468"), currency: "EUR")
+        let next = day(14).addingTimeInterval(9 * 3600)
+        _ = await run(ctx, at: next)
+
+        let latest = try XCTUnwrap(valuations(acc, ctx).last)
+        XCTAssertEqual(latest.marketValueEur, d("208.01"))
+        XCTAssertEqual(latest.cashValueEur, d("125.5"))
+        XCTAssertEqual(try metrics(at: next)?.valueEur, d("208.01"), "the value of the 13th includes the money")
+        XCTAssertEqual(try metrics(at: next)?.contributionsSinceValueEur, 0)
+    }
+
+    // Against the newest reading before the day being valued.
     func testTheImplausibleValueGuardStillApplies() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
-        ctx.insert(PortfolioValuation(account: acc, asOf: day(12), marketValueEur: 1))
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(11), marketValueEur: 1))
         try ctx.save()
 
         let outcome = await run(ctx)
@@ -640,7 +902,9 @@ final class FundPriceRefreshTests: XCTestCase {
 @MainActor
 private final class FakeFundSource: FundPriceSource {
     var infos: [String: FundInfo] = [:]
+    // A fund's window of prices, or just the newest when it has no series.
     var quotes: [String: FundQuote] = [:]
+    var series: [String: [FundQuote]] = [:]
     var lookupErrors: [String: any Error] = [:]
     var latestErrors: [String: any Error] = [:]
     // Long enough for a second run to start while a request is out.
@@ -649,6 +913,7 @@ private final class FakeFundSource: FundPriceSource {
     var onRequest: (() -> Void)?
     private(set) var lookups: [String] = []
     private(set) var latests: [String] = []
+    private(set) var sinces: [String: Date] = [:]
 
     func lookup(isin: String) async throws -> FundInfo {
         lookups.append(isin)
@@ -661,11 +926,12 @@ private final class FakeFundSource: FundPriceSource {
 
     func recent(isin: String, currency: String, since: Date?) async throws -> [FundQuote] {
         latests.append(isin)
+        sinces[isin] = since
         onRequest?()
         if delay > .zero { try await Task.sleep(for: delay) }
         if let error = latestErrors[isin] { throw error }
-        guard let quote = quotes[isin] else { throw FundPriceError.notFound }
-        return [quote]
+        guard let quotes = series[isin] ?? quotes[isin].map({ [$0] }) else { throw FundPriceError.notFound }
+        return quotes
     }
 }
 
@@ -682,6 +948,13 @@ private final class MemoryFundPriceCache: FundPriceCacheStore {
         self.cache = cache
         unreadable = false
         saves.append(cache)
+    }
+}
+
+private struct StubCoins: CryptoPriceSource {
+    let price: Decimal
+    func prices(for coinIds: [String]) async throws -> [String: Decimal] {
+        Dictionary(uniqueKeysWithValues: coinIds.map { ($0, price) })
     }
 }
 

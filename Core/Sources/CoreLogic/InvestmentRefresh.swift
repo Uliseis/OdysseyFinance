@@ -5,9 +5,10 @@ import CoreIntegrations
 
 extension CoreLogic {
     // Pulls today's market value for every investment account that has a live source and
-    // records it as that day's snapshot. Accounts without a source keep their typed snapshot;
-    // contributions since it are added by Investments.computeAccountMetrics, so a stale
-    // snapshot is only ever wrong by market movement, never by money paid in.
+    // records it as that day's snapshot; fund prices arrive a day or two late, so they value
+    // each weekday up to their own date instead. Accounts without a source keep their typed
+    // snapshot; contributions since it are added by Investments.computeAccountMetrics, so a
+    // stale snapshot is only ever wrong by market movement, never by money paid in.
     public enum InvestmentRefresh {
         public struct Outcome: Equatable, Sendable {
             public var updated: [UUID] = []
@@ -28,6 +29,10 @@ extension CoreLogic {
         // A day's NAV move stays well inside this; past it a wrong share class or a misplaced
         // decimal is likelier than the market.
         static let fundJumpLimit = Decimal(string: "0.15")!
+        // Weekdays valued in one refresh; a longer gap since the last value keeps the latest ones.
+        static let fundGapDays = 60
+        // Daily prices older than this leave the cache, however far back a request reached.
+        static let fundHistoryDays = 400
 
         // A mistyped holding quantity produces a plausible-looking number that is wrong by
         // orders of magnitude (0,04512345 BTC read as 4512345 wrote a €257bn valuation).
@@ -110,15 +115,14 @@ extension CoreLogic {
                 }
             }
 
-            var funds: [UUID: (market: Decimal, cash: Decimal)] = [:]
             let fundAccounts = accounts.filter { $0.liveValueSource == fundsSource }
             if !fundAccounts.isEmpty {
-                funds = await fundValues(
+                await refreshFunds(
                     fundAccounts, in: ctx, keychain: keychain, source: fundPrices,
                     cache: fundPriceCache, now: now, outcome: &outcome)
             }
 
-            for account in accounts {
+            for account in accounts where account.liveValueSource != fundsSource {
                 guard let source = account.liveValueSource else { continue }
                 var market: Decimal?
                 var cash: Decimal?
@@ -132,9 +136,6 @@ extension CoreLogic {
                         continue
                     }
                     market = qty * price
-                } else if source == fundsSource, let value = funds[account.id] {
-                    market = value.market
-                    cash = value.cash
                 }
 
                 guard let market, market > 0 else { continue }
@@ -171,15 +172,27 @@ extension CoreLogic {
 
         // MARK: - Funds
 
-        // Each funds account's value (held units at cached prices, plus broker cash) and its
-        // cash, refreshing the prices first. A fund that can't be priced refuses its account
-        // whole: a total without it would read as a loss that never happened.
+        private struct FundAccount {
+            let account: Account
+            let trades: [Funds.Trade]
+            let ledger: Funds.CashLedger
+            let legs: [Investments.ContributionLeg]
+            let valuations: [PortfolioValuation]
+            let held: [String]
+            // Held now or traded since the last value, so held on some day still to be valued.
+            let priced: Set<String>
+
+            var lastDay: Date? { valuations.last.map { Funds.dayStart($0.asOf) } }
+        }
+
+        // Every funds account is valued, after refreshing the prices, on each weekday since its
+        // last valuation up to its newest fund price, dated by the prices rather than the refresh.
         @MainActor
-        private static func fundValues(
+        private static func refreshFunds(
             _ accounts: [Account], in ctx: ModelContext, keychain: any MarketKeys,
             source makeSource: (String) -> any FundPriceSource, cache store: any FundPriceCacheStore,
             now: Date, outcome: inout Outcome
-        ) async -> [UUID: (market: Decimal, cash: Decimal)] {
+        ) async {
             let apiKey: String
             do {
                 apiKey = try keychain.loadEODHD()
@@ -188,71 +201,182 @@ extension CoreLogic {
                 let why = error as? MarketKeyError == .notFound
                     ? "add the EODHD key in Settings" : "the EODHD key couldn't be read (\(error))"
                 for account in accounts { outcome.failures.append("\(account.displayName): \(why); not saved.") }
-                return [:]
+                return
             }
-            var ready: [(account: Account, held: [Funds.Position], cash: Decimal)] = []
+            var ready: [FundAccount] = []
             for account in accounts {
                 do {
                     guard let ledger = try FundTrades.cashLedger(for: account, in: ctx) else {
                         outcome.failures.append("\(account.displayName): set the cash at the broker first; not saved.")
                         continue
                     }
-                    let held = Funds.positions(try FundTrades.trades(for: account, in: ctx)).filter { $0.units > 0 }
-                    ready.append((account, held, ledger.currentEur))
+                    let trades = try FundTrades.trades(for: account, in: ctx)
+                    let valuations = try Investments.listValuations(for: [account.id], in: ctx)
+                    let lastDay = valuations.last.map { Funds.dayStart($0.asOf) }
+                    let held = Funds.positions(trades).filter { $0.units > 0 }.map(\.isin)
+                    let traded = trades.filter { t in lastDay.map { Funds.dayStart(t.date) > $0 } ?? false }.map(\.isin)
+                    ready.append(FundAccount(
+                        account: account, trades: trades, ledger: ledger,
+                        legs: try Investments.listContributionLegs(for: [account.id], in: ctx),
+                        valuations: valuations, held: held, priced: Set(held + traded)))
                 } catch {
                     outcome.failures.append("\(account.displayName): \(error)")
                 }
             }
 
             let today = Funds.dayStart(now)
+            // By ISIN: a week before the oldest last value among the accounts that need its prices.
+            var since: [String: Date] = [:]
+            for fund in ready {
+                guard let lastDay = fund.lastDay else { continue }
+                let from = lastDay.addingTimeInterval(-7 * 86_400)
+                for isin in fund.priced { since[isin] = min(since[isin] ?? from, from) }
+            }
             let refresh = await refreshPrices(
-                Set(ready.flatMap { $0.held.map(\.isin) }).sorted(),
+                ready.reduce(into: Set<String>()) { $0.formUnion($1.priced) }.sorted(), since: since,
                 store: store, source: makeSource(apiKey), today: today)
-            let cache = refresh.cache
             if refresh.keyRejected { outcome.failures.append("EODHD rejected the key; check it in Settings.") }
             if let then = refresh.unreadableCache {
                 outcome.notices.append("The fund price cache couldn't be read; \(then).")
             }
             if let why = refresh.saveFailure { outcome.notices.append("Fund prices weren't cached: \(why)") }
 
-            var values: [UUID: (market: Decimal, cash: Decimal)] = [:]
-            var notices: Set<String> = []
-            for (account, held, cash) in ready {
-                var market = cash
-                var problems: [String] = []
-                for position in held {
-                    let entry = cache.funds[position.isin]
-                    let label = entry?.name ?? position.isin
-                    let why = refresh.notRefreshed[position.isin].map { " (\($0))" } ?? ""
-                    if let entry, entry.currency != "EUR" {
-                        problems.append("\(label): priced in \(entry.currency), not EUR")
-                    } else if let entry, let pending = entry.pendingPrice, let pendingDay = entry.pendingDay {
-                        let from = pendingDay == entry.priceDay ? entry.previousPrice : entry.price
-                        problems.append("\(label): new price awaiting confirmation (\(pending) for \(isoDay(pendingDay)) "
+            var fundNotices: Set<String> = []
+            var accountNotices: [String] = []
+            for fund in ready {
+                accountNotices += recordValues(
+                    of: fund, refresh: refresh, today: today, in: ctx, now: now,
+                    fundNotices: &fundNotices, outcome: &outcome)
+            }
+            outcome.notices += fundNotices.sorted() + accountNotices
+        }
+
+        // A held fund that can't be priced refuses the account; a day one held fund has no price
+        // for is left out. A total without it would read as a loss that never happened. Returns
+        // the account's notices.
+        @MainActor
+        private static func recordValues(
+            of fund: FundAccount, refresh: PriceRefresh, today: Date, in ctx: ModelContext, now: Date,
+            fundNotices: inout Set<String>, outcome: inout Outcome
+        ) -> [String] {
+            let name = fund.account.displayName
+            let cache = refresh.cache
+            var problems: [String] = []
+            var awaiting: [String] = []
+            var newest: [Date] = []
+            // A held jump stops the values at the fund's last accepted day.
+            var until: Date?
+            for isin in fund.held {
+                let entry = cache.funds[isin]
+                let label = entry?.name ?? isin
+                let why = refresh.notRefreshed[isin].map { " (\($0))" } ?? ""
+                if let entry, entry.currency != "EUR" {
+                    problems.append("\(label): priced in \(entry.currency), not EUR")
+                } else if let price = entry?.price, let priceDay = entry?.priceDay {
+                    if businessDays(after: priceDay, through: today) > fundPriceMaxBusinessDays {
+                        problems.append("\(label): its latest price is from \(isoDay(priceDay)), "
+                            + "more than \(fundPriceMaxBusinessDays) business days ago\(why)")
+                    } else if let pending = entry?.pendingPrice, let pendingDay = entry?.pendingDay {
+                        let from = pendingDay == priceDay ? entry?.previousPrice : price
+                        awaiting.append("\(label): new price awaiting confirmation (\(pending) for \(isoDay(pendingDay)) "
                             + "is more than \(fundJumpLimit * 100)% from \(from.map { "\($0)" } ?? "the one before"); "
                             + "a later day's price confirms or replaces it)")
-                    } else if let price = entry?.price, let priceDay = entry?.priceDay {
-                        if businessDays(after: priceDay, through: today) > fundPriceMaxBusinessDays {
-                            problems.append("\(label): its latest price is from \(isoDay(priceDay)), "
-                                + "more than \(fundPriceMaxBusinessDays) business days ago\(why)")
-                        } else {
-                            market += position.units * price
-                            if !why.isEmpty {
-                                notices.insert("\(label): not refreshed\(why); valued at its price of \(isoDay(priceDay)).")
-                            }
-                        }
+                        newest.append(priceDay)
+                        until = min(until ?? priceDay, priceDay)
                     } else {
-                        problems.append("\(label): no price yet\(why)")
+                        newest.append(priceDay)
+                        if !why.isEmpty {
+                            fundNotices.insert("\(label): not refreshed\(why); valued at its price of \(isoDay(priceDay)).")
+                        }
                     }
-                }
-                if problems.isEmpty {
-                    values[account.id] = (market, cash)
                 } else {
-                    outcome.failures.append("\(account.displayName): \(problems.joined(separator: "; ")); not saved.")
+                    problems.append("\(label): no price yet\(why)")
                 }
             }
-            outcome.notices += notices.sorted()
-            return values
+            guard problems.isEmpty else {
+                outcome.failures.append("\(name): \(problems.joined(separator: "; ")); not saved.")
+                return []
+            }
+
+            // Every weekday after the last value up to the newest price, then that day itself: a
+            // value already on it is replaced when it differs. Without funds held, cash is known today.
+            let through = min(newest.max() ?? today, until ?? .distantFuture)
+            if !awaiting.isEmpty {
+                outcome.failures.append("\(name): \(awaiting.joined(separator: "; ")); no value after \(Funds.dayRange(through...through)).")
+            }
+            let lastDay = fund.lastDay
+            if let lastDay, through < lastDay {
+                return ["\(name): no new prices since \(Funds.dayRange(lastDay...lastDay))."]
+            }
+            var days = lastDay.map { $0 == through ? [] : weekdays(after: $0, before: through) } ?? []
+            days.append(through)
+            let capped = days.count > fundGapDays
+            days = Array(days.suffix(fundGapDays))
+
+            let prices = cache.funds.compactMapValues { $0.currency == "EUR" ? $0.dailyPrices : nil }
+            var previous = fund.valuations.last { Funds.dayStart($0.asOf) < days[0] }?.marketValueEur
+            let note = "auto: \(fundsSource)"
+            var recorded: [Date] = []
+            var unpriced: [Date] = []
+            var missing: Set<String> = []
+            var refused = false
+            for day in days {
+                let value = Funds.value(on: day, trades: fund.trades, prices: prices, cash: fund.ledger)
+                guard let total = value.valueEur else {
+                    unpriced.append(day)
+                    missing.formUnion(value.missingISINs)
+                    continue
+                }
+                let market = Funds.cents(total)
+                let cash = Funds.cents(fund.ledger.cash(on: day))
+                guard market > 0 else { continue }
+                // The value includes the transfers booked on its day, so it's dated late enough
+                // that Investments doesn't add a timed one on top again.
+                let asOf = fund.legs.map(\.bookedAt).filter { Funds.dayStart($0) == day }.max() ?? day
+                if let existing = fund.valuations.last, Funds.dayStart(existing.asOf) == day,
+                   existing.marketValueEur == market, existing.cashValueEur == cash,
+                   existing.notes == note, existing.asOf == asOf {
+                    continue
+                }
+                if isImplausible(market, previous: previous) {
+                    outcome.failures.append(
+                        "\(name): \(Self.plain(market)) is far from the last "
+                        + "reading (\(Self.plain(previous ?? 0))). Check the quantity; not saved.")
+                    refused = true
+                    break
+                }
+                do {
+                    try Investments.recordValuation(
+                        account: fund.account, marketValueEur: market, cashValueEur: cash,
+                        asOf: asOf, notes: note, in: ctx, now: now)
+                    recorded.append(day)
+                    previous = market
+                } catch {
+                    outcome.failures.append("\(name): \(error)")
+                    refused = true
+                    break
+                }
+            }
+
+            var notices: [String] = []
+            if let first = recorded.first, let last = recorded.last {
+                outcome.updated.append(fund.account.id)
+                notices.append("\(name): values recorded for \(count(recorded.count, "day")) "
+                    + "(\(Funds.dayRange(first...last))).")
+            }
+            if capped, let lastDay {
+                notices.append("\(name): the gap since \(Funds.dayRange(lastDay...lastDay)) is longer than "
+                    + "\(fundGapDays) weekdays; only the latest \(fundGapDays) were filled.")
+            }
+            if let first = unpriced.first, let last = unpriced.last {
+                let labels = missing.sorted().map { cache.funds[$0]?.name ?? $0 }
+                outcome.failures.append("\(name): \(count(unpriced.count, "day")) not valued "
+                    + "(\(Funds.dayRange(first...last))): no price in the week before for \(labels.joined(separator: ", ")).")
+            }
+            if recorded.isEmpty, unpriced.isEmpty, !refused, let lastDay {
+                notices.append("\(name): no new prices since \(Funds.dayRange(lastDay...lastDay)).")
+            }
+            return notices
         }
 
         private struct PriceRefresh {
@@ -270,7 +394,8 @@ extension CoreLogic {
         // killed mid-request still counts it, and again after with its answer.
         @MainActor
         private static func refreshPrices(
-            _ isins: [String], store: any FundPriceCacheStore, source: any FundPriceSource, today: Date
+            _ isins: [String], since: [String: Date], store: any FundPriceCacheStore,
+            source: any FundPriceSource, today: Date
         ) async -> PriceRefresh {
             let loaded = store.load()
             var result = PriceRefresh(cache: loaded ?? FundPriceCache())
@@ -348,9 +473,11 @@ extension CoreLogic {
                 save()
                 defer { save() }
                 do {
-                    let quotes = try await source.recent(isin: isin, currency: entry.currency, since: nil)
+                    let quotes = try await source.recent(isin: isin, currency: entry.currency, since: since[isin])
                     entry.fetchedDay = today
-                    if let quote = quotes.last { accept(quote, into: &entry) }
+                    accept(quotes, into: &entry)
+                    let kept = dailyPricesKept(since: since[isin], today: today)
+                    entry.history.removeAll { $0.date < kept }
                     result.cache.funds[isin] = entry
                 } catch {
                     if isCancellation(error) {
@@ -367,37 +494,85 @@ extension CoreLogic {
             return result
         }
 
-        // Takes the quote into the entry, or holds it as pending when it jumps. A quote older
-        // than the cached or pending price is ignored. The jump is measured against a price of
-        // an earlier day, so a NAV re-published for the cached day is checked against the day
-        // before it.
-        private static func accept(_ quote: FundQuote, into entry: inout FundPriceCache.Entry) {
-            if let newest = [entry.priceDay, entry.pendingDay].compactMap({ $0 }).max(), quote.day < newest { return }
-            // A cached price too old to value with says nothing about how far the market has
-            // moved since, so it's no reference.
-            let stale = entry.priceDay.map {
-                businessDays(after: $0, through: quote.day) > fundPriceMaxBusinessDays
-            } == true
-            var previous = entry.priceDay == quote.day ? entry.previousPrice : stale ? nil : entry.price
-            if let reference = previous, isJump(quote.price, from: reference) {
+        // Takes a fetched series into the entry. The days after the newest accepted price are
+        // accepted in order up to the first that jumps from the one before; the newest day then
+        // goes through the pending check against the last accepted price, held when it jumps.
+        // A series no newer than the cached or pending price is ignored, and days already
+        // accepted aren't checked again. A jump is measured against a price of an earlier day,
+        // so a NAV re-published for the cached day is checked against the day before it.
+        private static func accept(_ series: [FundQuote], into entry: inout FundPriceCache.Entry) {
+            guard let newest = series.last else { return }
+            if let latest = [entry.priceDay, entry.pendingDay].compactMap({ $0 }).max(), newest.day < latest { return }
+            var last = entry.priceDay.flatMap { day in entry.price.map { Funds.PricePoint(date: day, priceEur: $0) } }
+            var previous = entry.previousPrice
+            var accepted: [Funds.PricePoint] = []
+            var held: [Funds.PricePoint] = []
+            for quote in series.dropLast() where entry.priceDay.map({ quote.day > $0 }) ?? true {
+                let point = Funds.PricePoint(date: quote.day, priceEur: quote.price)
+                let reference = usable(last, on: point.date)
+                if held.isEmpty, reference.map({ !isJump(point.priceEur, from: $0) }) ?? true {
+                    previous = reference
+                    last = point
+                    accepted.append(point)
+                } else {
+                    held.append(point)
+                }
+            }
+            var reference = newest.day == entry.priceDay ? entry.previousPrice : usable(last, on: newest.day)
+            if let jumpedFrom = reference, isJump(newest.price, from: jumpedFrom) {
                 // Two different days agreeing on the new level is a real move, not a bad print.
                 guard let pending = entry.pendingPrice, let pendingDay = entry.pendingDay,
-                      quote.day > pendingDay, !isJump(quote.price, from: pending) else {
-                    entry.pendingPrice = quote.price
-                    entry.pendingDay = quote.day
+                      newest.day > pendingDay, !isJump(newest.price, from: pending) else {
+                    take(accepted, previous: previous, into: &entry)
+                    entry.pendingPrice = newest.price
+                    entry.pendingDay = newest.day
                     return
                 }
-                previous = pending
+                // So are the days leading up to it that agree with each other.
+                var leading = held
+                if pendingDay > (last?.date ?? .distantPast), !held.contains(where: { $0.date == pendingDay }) {
+                    leading.append(Funds.PricePoint(date: pendingDay, priceEur: pending))
+                    leading.sort { $0.date < $1.date }
+                }
+                var confirmed: [Funds.PricePoint] = []
+                for point in leading.reversed() {
+                    guard !isJump(confirmed.first?.priceEur ?? newest.price, from: point.priceEur) else { break }
+                    confirmed.insert(point, at: 0)
+                }
+                accepted += confirmed
+                reference = confirmed.last?.priceEur ?? pending
             }
-            entry.previousPrice = previous
-            entry.price = quote.price
-            entry.priceDay = quote.day
+            take(accepted + [Funds.PricePoint(date: newest.day, priceEur: newest.price)], previous: reference, into: &entry)
             entry.pendingPrice = nil
             entry.pendingDay = nil
         }
 
+        // The points become the entry's newest daily prices, the last of them its price.
+        private static func take(_ points: [Funds.PricePoint], previous: Decimal?, into entry: inout FundPriceCache.Entry) {
+            guard let top = points.last else { return }
+            let days = Set(points.map(\.date))
+            entry.history = entry.dailyPrices.filter { !days.contains($0.date) } + points
+            entry.price = top.priceEur
+            entry.priceDay = top.date
+            entry.previousPrice = previous
+        }
+
+        // A price too old to value with says nothing about how far the market has moved since,
+        // so it's no reference.
+        private static func usable(_ point: Funds.PricePoint?, on day: Date) -> Decimal? {
+            guard let point, businessDays(after: point.date, through: day) <= fundPriceMaxBusinessDays else { return nil }
+            return point.priceEur
+        }
+
         private static func isJump(_ price: Decimal, from reference: Decimal) -> Bool {
             reference > 0 && abs(price - reference) / reference > fundJumpLimit
+        }
+
+        // From two weeks back, the price source's own window, or from where the request reached
+        // when that's earlier, but never more than fundHistoryDays.
+        static func dailyPricesKept(since: Date?, today: Date) -> Date {
+            let window = today.addingTimeInterval(-14 * 86_400)
+            return max(min(since ?? window, window), today.addingTimeInterval(-Double(fundHistoryDays) * 86_400))
         }
 
         // A request cut short by a cancelled task isn't counted against the day's cap.
@@ -419,6 +594,24 @@ extension CoreLogic {
                 if weekday != 1 && weekday != 7 { count += 1 }
             }
             return count
+        }
+
+        // Monday to Friday, UTC, after `day` and before `end`'s day.
+        private static func weekdays(after day: Date, before end: Date) -> [Date] {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "UTC")!
+            let last = cal.startOfDay(for: end)
+            var current = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: day))!
+            var days: [Date] = []
+            while current < last {
+                if !cal.isDateInWeekend(current) { days.append(current) }
+                current = cal.date(byAdding: .day, value: 1, to: current)!
+            }
+            return days
+        }
+
+        private static func count(_ n: Int, _ noun: String) -> String {
+            "\(n) \(noun)\(n == 1 ? "" : "s")"
         }
 
         // The client's errors without the request: its URL carries the key.
