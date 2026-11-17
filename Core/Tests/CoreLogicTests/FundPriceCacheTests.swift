@@ -125,6 +125,20 @@ final class FundPriceCacheTests: XCTestCase {
         XCTAssertNil(cache.priceDays(for: ["ZZ0000000C08", "ZZ0000000D07"]))
     }
 
+    func testPriceDaysOfTradesSpanOnlyTheFundsTheyStillHold() {
+        let d1 = Date(timeIntervalSince1970: 21_990 * 86_400), d2 = d1.addingTimeInterval(86_400)
+        var cache = CoreLogic.FundPriceCache()
+        cache.funds["ZZ0000000A00"] = .init(name: "Fund A", currency: "EUR", price: 5, priceDay: d2)
+        cache.funds["ZZ0000000B09"] = .init(name: "Fund B", currency: "EUR", price: 7, priceDay: d1)
+        let trades = [
+            CoreLogic.Funds.Trade(isin: "ZZ0000000A00", date: d1, side: .buy, units: 3, amountEur: 15),
+            CoreLogic.Funds.Trade(isin: "ZZ0000000B09", date: d1, side: .buy, units: 2, amountEur: 14),
+            CoreLogic.Funds.Trade(isin: "ZZ0000000B09", date: d2, side: .sell, units: 2, amountEur: 14),
+        ]
+        XCTAssertEqual(cache.priceDays(heldBy: trades), d2...d2, "B is sold out")
+        XCTAssertNil(cache.priceDays(heldBy: []))
+    }
+
     func testEuroPricesLeaveOutOtherCurrenciesAndFundsWithoutAPrice() {
         var cache = CoreLogic.FundPriceCache()
         cache.funds["ZZ0000000A00"] = .init(name: "Euro Fund", currency: "EUR", price: 5, pendingPrice: 9)

@@ -81,6 +81,7 @@ struct InvestmentsModel {
         var lastUpdated: Date?
         var rows: [Row] = []
         let fundsSource = CoreLogic.InvestmentRefresh.fundsSource
+        // Read once for every row, and only with an account valued from fund prices.
         let fundPrices = accounts.contains { $0.liveValueSource == fundsSource } ? FundPriceCacheFile().load() : nil
         // Value counted against cost, not the portfolio total: an account with no cost basis
         // (an asset whose entry price was never recorded) would otherwise have its entire
@@ -99,6 +100,8 @@ struct InvestmentsModel {
             if let la = m?.latestAsOf, lastUpdated == nil || la > lastUpdated! {
                 lastUpdated = la
             }
+            let fundTrades = r.account.liveValueSource == fundsSource
+                ? try? CoreLogic.FundTrades.trades(for: r.account, in: ctx) : nil
             rows.append(Row(
                 id: r.account.id, name: r.account.displayName, group: r.group.name,
                 valueEur: m?.valueEur, pnlEur: m?.pnlEur, pnlPct: m?.pnlPct,
@@ -107,8 +110,7 @@ struct InvestmentsModel {
                 hasCostBasis: m?.costBasisEur != nil,
                 periodGainEur: returns?[r.account.id]?.gainEur,
                 periodGainPct: returns?[r.account.id]?.gainPct,
-                priceDays: r.account.liveValueSource == fundsSource
-                    ? fundPrices.flatMap { priceDays(of: r.account, in: $0, ctx: ctx) } : nil
+                priceDays: fundTrades.flatMap { fundPrices?.priceDays(heldBy: $0) }
             ))
         }
         rows.sort { $0.name < $1.name }
@@ -143,14 +145,6 @@ struct InvestmentsModel {
             periodGain: periodGain,
             firstReadingAt: valuations.map(\.asOf).min()
         )
-    }
-
-    @MainActor
-    private static func priceDays(
-        of account: Account, in cache: CoreLogic.FundPriceCache, ctx: ModelContext
-    ) -> ClosedRange<Date>? {
-        guard let trades = try? CoreLogic.FundTrades.trades(for: account, in: ctx) else { return nil }
-        return cache.priceDays(for: CoreLogic.Funds.positions(trades).filter { $0.units > 0 }.map(\.isin))
     }
 }
 
