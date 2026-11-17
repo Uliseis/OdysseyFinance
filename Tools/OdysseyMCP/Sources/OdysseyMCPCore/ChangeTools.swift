@@ -38,7 +38,8 @@ extension ToolCatalog {
             - mirrorTransfer {sourceTxId, targetAccountId} (a one-off mirror leg on a manual account, no route)
             - createSharedGroupFromCredit {label, creditTxId, expenseTxIds} (a payback that covers several expenses)
             - archiveAccount {accountId, archived (default true)} (archiving unpairs the account's transfers and \
-            deletes their route mirrors; the preview says how many and with which accounts)
+            deletes their route mirrors; the preview says how many and with which accounts, and such an archive \
+            can't be undone)
             - importFundOrders {accountId, ordersCsvPath or ordersCsv, movementsCsvPath or movementsCsv, \
             heldUnits: {ISIN: units held today, as the broker shows them}} (MyInvestor's orders and cash-movements \
             exports into an investment account; all or nothing, and a refusal says why. Lists the new trades, \
@@ -56,7 +57,8 @@ extension ToolCatalog {
             prefer createRule plus applyRules; keep categorize for one-off rows.
             Categories are referenced by name, records by id from the read tools.
             Undo: categorize, createCategory, createRule, applyRules, recordValuation, createTransaction, \
-            mirrorTransfer, archiveAccount, importFundOrders, setBrokerCashAnchor, setCostBasisOpening, \
+            mirrorTransfer, archiveAccount (undoable unless it unpairs transfers), importFundOrders, \
+            setBrokerCashAnchor, setCostBasisOpening, \
             setLiveSource and the two requests can be undone from the phone. Everything else can't, and one such op takes Undo away from its whole batch, so \
             send those in a batch of their own. The preview's "undoable" says which you have.
             """,

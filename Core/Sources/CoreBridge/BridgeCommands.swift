@@ -113,7 +113,8 @@ public enum BridgeOp: Sendable, Equatable {
     }
 
     // Whether applying it records how to reverse it. One op that doesn't takes Undo away from
-    // its whole batch, so Claude keeps these in batches of their own.
+    // its whole batch, so Claude keeps these in batches of their own. An archive that unpairs
+    // transfers records none either; its message says so.
     public var isUndoable: Bool {
         switch self {
         case .categorize, .createCategory, .createRule, .applyRules, .recordValuation, .requestBankSync, .requestReconnect,

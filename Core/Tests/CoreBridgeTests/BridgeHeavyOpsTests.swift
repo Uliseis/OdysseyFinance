@@ -195,21 +195,39 @@ final class BridgeHeavyOpsTests: XCTestCase {
         XCTAssertFalse(f.broker.archived)
     }
 
-    func test_archiving_previewsTheTransfersItUnpairs() throws {
+    // Unarchiving brings back route mirrors but not detected or hand-made pairs, so an archive
+    // that unpairs anything has no Undo.
+    func test_archiving_previewsTheTransfersItUnpairs_andThenHasNoUndo() throws {
         let f = try BridgeFixture()
         let replica = try BridgeReplica(BridgeExport.make(in: f.ctx, appState: BridgeFixture.appState, redact: false, now: now))
         let preview = try replica.preview(
             BridgeBatch(summary: "", ops: [.archiveAccount(accountId: f.checking.id, archived: true)]), now: now)
         let expected = "Hidden from lists and totals; its bank no longer syncs it. "
             + "Its 2 transfers with Card and Savings are unpaired: 1 counts as income or spending again, "
-            + "and 1 that a transfer route copied there is deleted. 300 EUR in all."
+            + "and 1 that a transfer route copied there is deleted. 300 EUR in all. "
+            + "Permanent: no Undo, since unarchiving won't re-pair them all."
+        XCTAssertEqual(preview.outcome.ops.first?.status, .applied)
         XCTAssertEqual(preview.outcome.ops.first?.message, expected)
+        XCTAssertNil(preview.outcome.undo)
         XCTAssertFalse(f.checking.archived, "a preview must not touch the real store")
 
         let applied = run([.archiveAccount(accountId: f.checking.id, archived: true)], f)
         XCTAssertEqual(applied.ops.first?.message, expected)
+        XCTAssertNil(applied.undo)
         XCTAssertTrue(f.mirroredSource.mirrors.isEmpty)
-        XCTAssertEqual(run(try XCTUnwrap(applied.undo), f).ops.first?.message, "Back in lists and totals")
+
+        let unarchived = run([.archiveAccount(accountId: f.checking.id, archived: false)], f)
+        XCTAssertEqual(unarchived.ops.first?.message, "Back in lists and totals")
+        XCTAssertNotNil(unarchived.undo, "unarchiving stays undoable")
+    }
+
+    func test_archivingWithoutTransfers_staysUndoable() throws {
+        let f = try BridgeFixture()
+        let replica = try BridgeReplica(BridgeExport.make(in: f.ctx, appState: BridgeFixture.appState, redact: false, now: now))
+        let preview = try replica.preview(
+            BridgeBatch(summary: "", ops: [.archiveAccount(accountId: f.broker.id, archived: true)]), now: now)
+        XCTAssertEqual(preview.outcome.ops.first?.message, "Hidden from lists and totals; its bank no longer syncs it")
+        XCTAssertEqual(preview.outcome.undo, [.archiveAccount(accountId: f.broker.id, archived: false)])
     }
 
     func test_previewListsEveryPastCycleItMoves() throws {
