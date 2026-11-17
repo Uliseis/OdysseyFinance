@@ -70,6 +70,18 @@ final class BankSyncTests: XCTestCase {
         XCTAssertTrue(throttle.isDue(every: Throttle.backgroundInterval, now: now.addingTimeInterval(6 * 3600)))
     }
 
+    func testASyncThatStartsHoldsTheBanksOffForAFewMinutes() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        throttle.markStarted(now)
+        XCTAssertFalse(throttle.isDue(now: now.addingTimeInterval(4 * 60)))
+        XCTAssertTrue(throttle.isDue(now: now.addingTimeInterval(5 * 60)),
+                      "a run killed mid-way doesn't hold them off for the full interval")
+        XCTAssertTrue(throttle.isDue(every: Throttle.backgroundInterval, now: now.addingTimeInterval(5 * 60)))
+        throttle.record(now.addingTimeInterval(60))
+        XCTAssertFalse(throttle.isDue(now: now.addingTimeInterval(10 * 60)), "finishing extends it to the full interval")
+        XCTAssertTrue(throttle.isDue(now: now.addingTimeInterval(16 * 60)))
+    }
+
     func testItKeepsThePaceTheForegroundSyncAlreadySet() throws {
         let now = Date.now
         defaults.set(now.timeIntervalSince1970, forKey: "ForegroundBankSync.lastRunAt")
@@ -81,6 +93,10 @@ final class BankSyncTests: XCTestCase {
     func testASyncThatReachedTheBanksUsesUpTheInterval() async throws {
         let ctx = try connectedContext()
         let api = StubAPI()
+        api.whileSessionInFlight = { [self] in
+            XCTAssertNil(throttle.lastRun)
+            XCTAssertFalse(throttle.isDue(every: 0), "marked as started before the first call to a bank")
+        }
         let banks = await run(ctx, api: api)
         XCTAssertEqual(banks, .synced(CoreLogic.EBSync.Report(synced: 1)))
         XCTAssertEqual(api.sessions, 1)
@@ -125,6 +141,7 @@ final class BankSyncTests: XCTestCase {
         let banks = await CoreLogic.BankSync.runIfDue(in: ctx, throttle: throttle, api: { throw EBKeyError.notFound })
         guard case .noKey = banks else { return XCTFail("expected noKey, got \(banks)") }
         XCTAssertNil(throttle.lastRun)
+        XCTAssertTrue(throttle.isDue())
     }
 
     func testACancelledSyncLeavesTheSyncToTheNextCaller() async throws {
@@ -132,7 +149,8 @@ final class BankSyncTests: XCTestCase {
         let task = Task { await run(ctx) }
         task.cancel()
         _ = await task.value
-        XCTAssertTrue(throttle.isDue())
+        XCTAssertNil(throttle.lastRun)
+        XCTAssertTrue(throttle.isDue(now: .now.addingTimeInterval(5 * 60)))
     }
 
     func testNoBankConnectionStillKeepsThePace() async throws {

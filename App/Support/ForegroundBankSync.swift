@@ -46,7 +46,8 @@ enum ForegroundBankSync {
     @MainActor
     static func runNow(_ ctx: ModelContext, connectionIds: [UUID]?) async {
         guard let signer = try? EBKeychain().loadSigner() else { return }
-        CoreLogic.BankSyncThrottle().record()
+        let throttle = CoreLogic.BankSyncThrottle()
+        throttle.markStarted()
         let api = EBClient(tokenProvider: signer)
         await withBackgroundTask("ClaudeBankSync") {
             if let connectionIds {
@@ -57,6 +58,7 @@ enum ForegroundBankSync {
             } else {
                 _ = await CoreLogic.EBSync.syncAll(api: api, in: ctx)
             }
+            if !Task.isCancelled { throttle.record() }
             await AutomationRunner.run(ctx)
         }
     }

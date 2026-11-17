@@ -12,8 +12,12 @@ extension CoreLogic {
         public static let interval: TimeInterval = 15 * 60
         // iOS picks when the background task runs; a few runs a day would use up the allowance.
         public static let backgroundInterval: TimeInterval = 6 * 3600
+        // Marked when a sync starts, so one killed mid-way doesn't have every later launch retry
+        // straight away; one that finishes marks the full interval.
+        static let provisional: TimeInterval = 5 * 60
         // Where ForegroundBankSync kept it, so an update doesn't reset the pace.
         static let lastRunKey = "ForegroundBankSync.lastRunAt"
+        static let startedKey = "BankSyncThrottle.startedAt"
 
         private let defaults: UserDefaults
 
@@ -21,18 +25,27 @@ extension CoreLogic {
             self.defaults = defaults
         }
 
-        public var lastRun: Date? {
-            let t = defaults.double(forKey: Self.lastRunKey)
-            return t > 0 ? Date(timeIntervalSince1970: t) : nil
-        }
+        public var lastRun: Date? { date(Self.lastRunKey) }
 
         public func isDue(every interval: TimeInterval = Self.interval, now: Date = .now) -> Bool {
+            if let started = date(Self.startedKey), now.timeIntervalSince(started) < Self.provisional {
+                return false
+            }
             guard let lastRun else { return true }
             return now.timeIntervalSince(lastRun) >= interval
         }
 
+        public func markStarted(_ now: Date = .now) {
+            defaults.set(now.timeIntervalSince1970, forKey: Self.startedKey)
+        }
+
         public func record(_ now: Date = .now) {
             defaults.set(now.timeIntervalSince1970, forKey: Self.lastRunKey)
+        }
+
+        private func date(_ key: String) -> Date? {
+            let t = defaults.double(forKey: key)
+            return t > 0 ? Date(timeIntervalSince1970: t) : nil
         }
     }
 
@@ -41,7 +54,8 @@ extension CoreLogic {
         @MainActor public private(set) static var isRunning = false
 
         // Only a sync that reached the banks and wasn't cut short uses up the interval: one that
-        // couldn't read the key or was cancelled leaves it to the next caller.
+        // couldn't read the key leaves it to the next caller, one cut short to a caller a few
+        // minutes later.
         @MainActor
         public static func runIfDue(
             in ctx: ModelContext, every interval: TimeInterval = BankSyncThrottle.interval,
@@ -64,6 +78,7 @@ extension CoreLogic {
             }
             isRunning = true
             defer { isRunning = false }
+            throttle.markStarted()
             let results = await EBSync.syncAll(api: api, in: ctx)
             if !Task.isCancelled { throttle.record() }
             return .synced(EBSync.report(results, in: ctx))
