@@ -21,6 +21,8 @@ struct FundHoldings {
     let realisedEur: Decimal
     // nil without a broker cash anchor.
     let brokerCashEur: Decimal?
+    // The span of the held funds' newest prices; nil when none has one.
+    let priceDays: ClosedRange<Date>?
 
     // nil when the account has no fund trades.
     @MainActor
@@ -32,11 +34,13 @@ struct FundHoldings {
             return Fund(position: position, name: entry?.name, price: entry?.price,
                         priceCurrency: entry?.currency, priceDay: entry?.priceDay)
         }
+        let held = funds.filter { $0.position.units > 0 }.sorted { $0.label < $1.label }
         return FundHoldings(
-            held: funds.filter { $0.position.units > 0 }.sorted { $0.label < $1.label },
+            held: held,
             sold: funds.filter { $0.position.units == 0 }.sorted { $0.label < $1.label },
             realisedEur: funds.reduce(0) { $0 + $1.position.realisedGainEur },
-            brokerCashEur: (try? CoreLogic.FundTrades.cashLedger(for: account, in: ctx))?.currentEur)
+            brokerCashEur: (try? CoreLogic.FundTrades.cashLedger(for: account, in: ctx))?.currentEur,
+            priceDays: cache.priceDays(for: held.map(\.id)))
     }
 }
 
@@ -67,7 +71,13 @@ struct FundsSection: View {
                 Button("Import MyInvestor Exports", systemImage: "tray.and.arrow.down", action: onImport)
             }
         } header: {
-            Text("Funds")
+            AdaptiveStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+                Text("Funds")
+                Spacer(minLength: Theme.Space.s)
+                if let days = holdings?.priceDays {
+                    Text(FundHoldings.pricesFrom(days))
+                }
+            }
         } footer: {
             Text(holdings == nil
                  ? "Import MyInvestor's orders and cash movements to follow each fund's units, cost and gains."
@@ -135,6 +145,11 @@ extension FundHoldings {
     // NAVs carry more decimals than money: up to four, like the broker shows them.
     static func price(_ value: Decimal, currency: String) -> String {
         value.formatted(.currency(code: currency).precision(.fractionLength(2...4)))
+    }
+
+    // "Prices from 12–13 Nov": the days a fund-priced account's value stands at.
+    static func pricesFrom(_ days: ClosedRange<Date>) -> String {
+        "Prices from \(CoreLogic.Funds.dayRange(days, locale: .current))"
     }
 }
 

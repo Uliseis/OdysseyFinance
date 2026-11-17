@@ -37,6 +37,8 @@ struct InvestmentsModel {
         let hasCostBasis: Bool
         let periodGainEur: Decimal?
         let periodGainPct: Decimal?
+        // For an account valued from fund prices: the span of its held funds' newest prices.
+        let priceDays: ClosedRange<Date>?
     }
 
     static let empty = InvestmentsModel(
@@ -78,6 +80,8 @@ struct InvestmentsModel {
         var countedForCost = 0
         var lastUpdated: Date?
         var rows: [Row] = []
+        let fundsSource = CoreLogic.InvestmentRefresh.fundsSource
+        let fundPrices = accounts.contains { $0.liveValueSource == fundsSource } ? FundPriceCacheFile().load() : nil
         // Value counted against cost, not the portfolio total: an account with no cost basis
         // (an asset whose entry price was never recorded) would otherwise have its entire
         // value reported as profit.
@@ -102,7 +106,9 @@ struct InvestmentsModel {
                 isLive: m?.isLive ?? false, isStale: m?.isStale ?? false,
                 hasCostBasis: m?.costBasisEur != nil,
                 periodGainEur: returns?[r.account.id]?.gainEur,
-                periodGainPct: returns?[r.account.id]?.gainPct
+                periodGainPct: returns?[r.account.id]?.gainPct,
+                priceDays: r.account.liveValueSource == fundsSource
+                    ? fundPrices.flatMap { priceDays(of: r.account, in: $0, ctx: ctx) } : nil
             ))
         }
         rows.sort { $0.name < $1.name }
@@ -137,6 +143,14 @@ struct InvestmentsModel {
             periodGain: periodGain,
             firstReadingAt: valuations.map(\.asOf).min()
         )
+    }
+
+    @MainActor
+    private static func priceDays(
+        of account: Account, in cache: CoreLogic.FundPriceCache, ctx: ModelContext
+    ) -> ClosedRange<Date>? {
+        guard let trades = try? CoreLogic.FundTrades.trades(for: account, in: ctx) else { return nil }
+        return cache.priceDays(for: CoreLogic.Funds.positions(trades).filter { $0.units > 0 }.map(\.isin))
     }
 }
 
