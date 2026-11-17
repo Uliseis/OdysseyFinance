@@ -12,6 +12,8 @@ struct AccountFormView: View {
     @Environment(\.modelContext) private var ctx
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingDelete = false
+    @State private var confirmingArchive = false
+    @State private var archiveImpact: CoreLogic.Accounts.ArchiveImpact?
     @State private var saveError: String?
     @State private var openingText = ""
 
@@ -107,6 +109,14 @@ struct AccountFormView: View {
                 }
             }
             .task { if edit.spaceId == nil { edit.spaceId = defaultSpaceId } }
+            .alert("Archive “\(edit.existing?.displayName ?? edit.name)”?", isPresented: $confirmingArchive,
+                   presenting: archiveImpact) { _ in
+                Button("Archive", role: .destructive) { save(archiveConfirmed: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: { impact in
+                Text(impact.summary + " To keep it out of your totals but keep its transfers, "
+                     + "turn on Exclude from net worth instead.")
+            }
             .saveErrorAlert($saveError)
             .onAppear { openingText = Money.plainAmountText(edit.openingBalance) }
             .onChange(of: openingText) { edit.openingBalance = CoreLogic.Transactions.parseSignedAmount(openingText) ?? 0 }
@@ -117,10 +127,19 @@ struct AccountFormView: View {
         (spaces.first { $0.isDefault } ?? spaces.first)?.id
     }
 
-    private func save() {
+    private func save(archiveConfirmed: Bool = false) {
         let group = groups.first { $0.id == edit.groupId }
         let space = spaces.first { $0.id == edit.spaceId }
         do {
+            // Archiving unpairs the account's transfers; ask first when that changes anything.
+            if !archiveConfirmed, let existing = edit.existing, !existing.archived, edit.archived {
+                let impact = try CoreLogic.Accounts.archiveImpact(of: existing, in: ctx)
+                if !impact.isEmpty {
+                    archiveImpact = impact
+                    confirmingArchive = true
+                    return
+                }
+            }
             if let existing = edit.existing {
                 _ = try CoreLogic.Accounts.update(
                     existing, name: edit.name, alias: edit.alias,
