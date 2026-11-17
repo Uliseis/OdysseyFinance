@@ -81,6 +81,11 @@ extension CoreLogic {
             return first...last
         }
 
+        // The same for the funds an account's trades still hold.
+        public func priceDays(heldBy trades: [Funds.Trade]) -> ClosedRange<Date>? {
+            priceDays(for: Funds.positions(trades).filter { $0.units > 0 }.map(\.isin))
+        }
+
         // A fund that can't be read is dropped and looked up again; the rest stay. The request
         // count has no fallback: without it the file is unreadable as a whole.
         public init(from decoder: any Decoder) throws {
