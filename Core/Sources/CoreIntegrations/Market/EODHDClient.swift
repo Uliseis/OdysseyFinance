@@ -13,6 +13,8 @@ public struct EODHDClient: FundPriceSource, Sendable {
 
     // Wide enough to span Easter's four-day close plus a NAV published a day or two late.
     static let latestWindowDays = 14
+    // The free plan serves a year of end-of-day history.
+    static let historyDays = 365
 
     public init(
         apiKey: String,
@@ -54,18 +56,19 @@ public struct EODHDClient: FundPriceSource, Sendable {
         try Self.decodeSearch(try await fetch(makeSearchRequest(isin: isin)), isin: isin)
     }
 
-    public func latest(isin: String, currency: String) async throws -> FundQuote {
-        try await latest(isin: isin, currency: currency, asOf: .now)
+    public func recent(isin: String, currency: String, since: Date?) async throws -> [FundQuote] {
+        try await recent(isin: isin, currency: currency, since: since, asOf: .now)
     }
 
-    // /eod reports no currency, so the quote carries the share class's currency as the caller knows it.
-    func latest(isin: String, currency: String, asOf: Date) async throws -> FundQuote {
-        let from = FundDates.utc.date(byAdding: .day, value: -Self.latestWindowDays, to: asOf)!
+    // /eod reports no currency, so the quotes carry the share class's currency as the caller knows it.
+    func recent(isin: String, currency: String, since: Date?, asOf: Date) async throws -> [FundQuote] {
+        let window = FundDates.utc.date(byAdding: .day, value: -Self.latestWindowDays, to: asOf)!
+        let limit = FundDates.utc.date(byAdding: .day, value: -Self.historyDays, to: asOf)!
+        let from = max(min(since ?? window, window), limit)
         let data = try await fetch(makeRequest(isin: isin, from: from, to: asOf))
-        guard let newest = try Self.decodeHistory(data, isin: isin, currency: currency).last else {
-            throw FundPriceError.notFound
-        }
-        return newest
+        let quotes = try Self.decodeHistory(data, isin: isin, currency: currency)
+        guard !quotes.isEmpty else { throw FundPriceError.notFound }
+        return quotes
     }
 
     private func fetch(_ request: URLRequest) async throws -> Data {

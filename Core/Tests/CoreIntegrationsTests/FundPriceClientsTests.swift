@@ -133,25 +133,41 @@ final class FundPriceClientsTests: XCTestCase {
         XCTAssertEqual(EODHDClient.error(status: 503, body: body), .badResponse(status: 503, body: body))
     }
 
-    func testEODHDLatestTakesTheNewestRowOfATwoWeekWindow() async throws {
+    func testEODHDRecentReturnsTheWholeTwoWeekWindowOldestFirst() async throws {
         var seen: URLRequest?
         StubURLProtocol.handler = { req in
             seen = req
-            return (200, Data(#"[{"date":"2026-03-12","close":4.0721},{"date":"2026-03-13","close":4.1093}]"#.utf8))
+            return (200, Data(#"[{"date":"2026-03-13","close":4.1093},{"date":"2026-03-12","close":4.0721}]"#.utf8))
         }
         let client = EODHDClient(apiKey: key, session: StubURLProtocol.session())
-        let quote = try await client.latest(isin: isin, currency: "EUR", asOf: day("2026-03-16"))
-        XCTAssertEqual(quote.day, day("2026-03-13"))
-        XCTAssertEqual(quote.price, Decimal(string: "4.1093"))
+        let quotes = try await client.recent(isin: isin, currency: "EUR", since: nil, asOf: day("2026-03-16"))
+        XCTAssertEqual(quotes, [
+            FundQuote(isin: isin, day: day("2026-03-12"), price: Decimal(string: "4.0721")!, currency: "EUR"),
+            FundQuote(isin: isin, day: day("2026-03-13"), price: Decimal(string: "4.1093")!, currency: "EUR"),
+        ])
         XCTAssertEqual(query(try XCTUnwrap(seen))["from"], "2026-03-02")
         XCTAssertEqual(query(try XCTUnwrap(seen))["to"], "2026-03-16")
     }
 
-    func testEODHDLatestOnAnEmptyWindowIsNotFound() async {
+    func testEODHDRecentReachesBackToSinceButNeverPastAYear() async throws {
+        var froms: [String] = []
+        StubURLProtocol.handler = { req in
+            froms.append(self.query(req)["from"] ?? "")
+            return (200, Data(#"[{"date":"2026-03-13","close":4.1093}]"#.utf8))
+        }
+        let client = EODHDClient(apiKey: key, session: StubURLProtocol.session())
+        for since in ["2026-01-20", "2026-03-10", "2024-06-01"] {
+            _ = try await client.recent(isin: isin, currency: "EUR", since: day(since), asOf: day("2026-03-16"))
+        }
+        XCTAssertEqual(froms, ["2026-01-20", "2026-03-02", "2025-03-16"],
+                       "an earlier day widens the window, a later one doesn't narrow it, and the free plan stops at a year")
+    }
+
+    func testEODHDRecentOnAnEmptyWindowIsNotFound() async {
         StubURLProtocol.handler = { _ in (200, Data("[]".utf8)) }
         let client = EODHDClient(apiKey: key, session: StubURLProtocol.session())
         do {
-            _ = try await client.latest(isin: isin, currency: "EUR")
+            _ = try await client.recent(isin: isin, currency: "EUR", since: nil)
             XCTFail("expected notFound")
         } catch {
             XCTAssertEqual(error as? FundPriceError, .notFound)
@@ -162,7 +178,7 @@ final class FundPriceClientsTests: XCTestCase {
         StubURLProtocol.handler = { req in (500, Data("bad gateway for \(req.url!.absoluteString)".utf8)) }
         let client = EODHDClient(apiKey: key, session: StubURLProtocol.session())
         do {
-            _ = try await client.latest(isin: isin, currency: "EUR")
+            _ = try await client.recent(isin: isin, currency: "EUR", since: nil)
             XCTFail("expected badResponse")
         } catch {
             guard case .badResponse(500, let body) = error as? FundPriceError else {
@@ -175,7 +191,7 @@ final class FundPriceClientsTests: XCTestCase {
             throw URLError(.notConnectedToInternet, userInfo: [NSURLErrorFailingURLErrorKey: req.url!])
         }
         do {
-            _ = try await client.latest(isin: isin, currency: "EUR")
+            _ = try await client.recent(isin: isin, currency: "EUR", since: nil)
             XCTFail("expected a transport error")
         } catch {
             XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet)

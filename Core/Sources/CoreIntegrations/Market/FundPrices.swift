@@ -40,7 +40,9 @@ public enum FundPriceError: Error, Equatable {
 
 // Callers inject fakes through this.
 public protocol FundPriceSource: Sendable {
-    func latest(isin: String, currency: String) async throws -> FundQuote
+    // Oldest first and never empty: the NAVs of the last two weeks, reaching back to `since`
+    // when that's earlier.
+    func recent(isin: String, currency: String, since: Date?) async throws -> [FundQuote]
     func lookup(isin: String) async throws -> FundInfo
 }
 
