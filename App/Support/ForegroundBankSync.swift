@@ -18,6 +18,7 @@ enum ForegroundBankSync {
     final class Progress {
         var investments: CoreLogic.InvestmentRefresh.Outcome?
         var banks: CoreLogic.SyncSummary.Banks?
+        var snapshotAtDeadline: Task<Void, Never>?
     }
 
     @MainActor
@@ -46,15 +47,18 @@ enum ForegroundBankSync {
         let run = Task { @MainActor in
             await withBackgroundTask("SyncAndRefresh") {
                 let summary = await refresh(ctx, engine: engine, progress: progress)
-                // Forced past the export's 30-second pause, which the write at the deadline started;
-                // an unchanged snapshot is still skipped.
-                if !Task.isCancelled { await ClaudeBridge.exportSnapshot(ctx, force: true) }
+                if !Task.isCancelled {
+                    // After the write at the deadline, so the older snapshot can't land last; forced
+                    // past the 30-second pause that write started. An unchanged one is still skipped.
+                    await progress.snapshotAtDeadline?.value
+                    await ClaudeBridge.exportSnapshot(ctx, force: true)
+                }
                 return summary
             }
         }
         if let summary = await CoreLogic.Deadline.value(of: run, by: deadline) { return summary }
         // What's done so far reaches the Mac now, in case iOS stops the rest.
-        Task { await ClaudeBridge.exportSnapshot(ctx) }
+        progress.snapshotAtDeadline = Task { await ClaudeBridge.exportSnapshot(ctx) }
         return CoreLogic.SyncSummary.soFar(banks: progress.banks, investments: progress.investments)
     }
 
