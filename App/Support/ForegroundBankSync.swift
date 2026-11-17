@@ -68,7 +68,8 @@ enum ForegroundBankSync {
         // unconfigured bank connection shouldn't stop them refreshing.
         let investments = await CoreLogic.InvestmentRefresh.run(in: ctx)
         progress?.investments = investments
-        await engine?.sendPendingChanges()
+        // SaveObserver has queued the values; the nudge doesn't hold the banks up on CloudKit.
+        Task { await engine?.sendPendingChanges() }
         // Out of background time: the rest waits for the next run.
         guard !Task.isCancelled else { return CoreLogic.SyncSummary.soFar(banks: nil, investments: investments) }
         let banks = await CoreLogic.BankSync.runIfDue(in: ctx)
