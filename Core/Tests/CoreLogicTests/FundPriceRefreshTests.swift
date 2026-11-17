@@ -798,6 +798,37 @@ final class FundPriceRefreshTests: XCTestCase {
         ])
     }
 
+    // The cache holds prices from the 4th, kept for an account valued daily; this one was last
+    // valued on Friday 22 February, so its request reaches further back than the cache.
+    func testOlderDaysARequestReachesFillTheCacheSoAnOlderGapIsValued() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(22, month: 2).addingTimeInterval(22 * 3600), marketValueEur: 100))
+        try ctx.save()
+        let cached = [4, 5, 6, 7, 8, 11]
+        for (isin, name, price) in [(a, "Example Fund A", d("7")), (b, "Example Fund B", d("2"))] {
+            cache.cache.funds[isin] = Entry(name: name, currency: "EUR", price: price, priceDay: day(11), fetchedDay: day(12),
+                                            history: cached.map { .init(date: day($0), priceEur: price) })
+        }
+        let february = [15, 18, 19, 20, 21, 22, 25, 26, 27, 28]
+        // A misprinted NAV on the 27th, far from the days either side of it.
+        source.series[a] = prices(a, february.map { ($0, $0 == 27 ? "9" : "7") }, month: 2)
+            + prices(a, [(1, "7")] + cached.map { ($0, "7") } + [(12, "7")])
+        source.series[b] = prices(b, february.map { ($0, "2") }, month: 2) + prices(b, ([1] + cached + [12]).map { ($0, "2") })
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(source.sinces[a], day(15, month: 2))
+        XCTAssertEqual(outcome.failures, [])
+        let auto = try valuations(acc, ctx).dropFirst()
+        XCTAssertEqual(auto.map(\.asOf), [25, 26, 27, 28].map { day($0, month: 2) } + ([1] + cached + [12]).map { day($0) })
+        XCTAssertEqual(Set(auto.map(\.marketValueEur)), [d("103.5")], "10 × 7 + 4 × 2 + 25.50, the misprint left out")
+        let history = try XCTUnwrap(cache.cache.funds[a]?.history)
+        XCTAssertEqual(history.first?.date, day(15, month: 2))
+        XCTAssertFalse(history.contains { $0.date == day(27, month: 2) })
+        XCTAssertEqual(cache.cache.funds[a]?.priceDay, day(12))
+    }
+
     func testDailyPricesAreKeptFromTwoWeeksBackOrTheRequestsStartButNoMoreThan400Days() {
         var cal = Calendar(identifier: .iso8601)
         cal.timeZone = TimeZone(identifier: "UTC")!
