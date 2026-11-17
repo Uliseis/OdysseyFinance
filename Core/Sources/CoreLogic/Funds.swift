@@ -271,7 +271,7 @@ extension CoreLogic {
 
         // MARK: - Daily value
 
-        public struct PricePoint: Equatable, Sendable {
+        public struct PricePoint: Codable, Equatable, Sendable {
             public let date: Date
             public let priceEur: Decimal
 
@@ -325,6 +325,29 @@ extension CoreLogic {
         }()
 
         static func dayStart(_ date: Date) -> Date { utc.startOfDay(for: date) }
+
+        // UTC days as "13 Nov", "12–14 Nov", "28 Feb – 3 Mar" or, across a new year,
+        // "30 Dec 2030 – 2 Jan 2031". Day first whatever the locale; it only names the months.
+        public static func dayRange(_ days: ClosedRange<Date>, locale: Locale = Locale(identifier: "en_US_POSIX")) -> String {
+            var gregorian = Calendar(identifier: .gregorian)
+            gregorian.timeZone = utc.timeZone
+            let formatter = DateFormatter()
+            formatter.locale = locale
+            formatter.calendar = gregorian
+            formatter.timeZone = utc.timeZone
+            func text(_ day: Date, _ format: String) -> String {
+                formatter.dateFormat = format
+                return formatter.string(from: day)
+            }
+            let first = days.lowerBound, last = days.upperBound
+            let sameYear = gregorian.isDate(first, equalTo: last, toGranularity: .year)
+            if gregorian.isDate(first, inSameDayAs: last) { return text(last, "d MMM") }
+            if gregorian.isDate(first, equalTo: last, toGranularity: .month) {
+                return "\(text(first, "d"))–\(text(last, "d MMM"))"
+            }
+            let format = sameYear ? "d MMM" : "d MMM yyyy"
+            return "\(text(first, format)) – \(text(last, format))"
+        }
 
         // Whole UTC days from one date's day to the other's.
         static func days(from start: Date, to end: Date) -> Int {

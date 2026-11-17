@@ -33,6 +33,17 @@ final class FundsTests: XCTestCase {
         F.PricePoint(date: day(n), priceEur: d(eur))
     }
 
+    // MARK: - Day ranges
+
+    // day(n) is n days after Friday 1 March 2030.
+    func testDayRangeNamesTheMonthOnceAndTheYearOnlyWhenItChanges() {
+        XCTAssertEqual(F.dayRange(day(12)...day(12)), "13 Mar")
+        XCTAssertEqual(F.dayRange(day(11)...day(13).addingTimeInterval(20 * 3600)), "12–14 Mar", "by UTC day")
+        XCTAssertEqual(F.dayRange(day(-2)...day(2)), "27 Feb – 3 Mar")
+        XCTAssertEqual(F.dayRange(day(-61)...day(1)), "30 Dec 2029 – 2 Mar 2030")
+        XCTAssertEqual(F.dayRange(day(11)...day(12), locale: Locale(identifier: "es_ES")), "12–13 mar")
+    }
+
     // MARK: - ISIN
 
     func testISINCheckDigit() {
