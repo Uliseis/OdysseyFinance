@@ -37,7 +37,8 @@ extension ToolCatalog {
             category?} (manual accounts only; recorded like a quick-add, so a later statement import matches it)
             - mirrorTransfer {sourceTxId, targetAccountId} (a one-off mirror leg on a manual account, no route)
             - createSharedGroupFromCredit {label, creditTxId, expenseTxIds} (a payback that covers several expenses)
-            - archiveAccount {accountId, archived (default true)}
+            - archiveAccount {accountId, archived (default true)} (archiving unpairs the account's transfers and \
+            deletes their route mirrors; the preview says how many and with which accounts)
             - importFundOrders {accountId, ordersCsvPath or ordersCsv, movementsCsvPath or movementsCsv, \
             heldUnits: {ISIN: units held today, as the broker shows them}} (MyInvestor's orders and cash-movements \
             exports into an investment account; all or nothing, and a refusal says why. Lists the new trades, \

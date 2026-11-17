@@ -386,11 +386,15 @@ public enum BridgeExecutor {
                 step.message = archived ? "Already archived" : "Not archived"
                 return
             }
+            let impact = archived ? try CoreLogic.Accounts.archiveImpact(of: account, in: ctx) : nil
             try CoreLogic.Accounts.setArchived(account, archived, in: ctx, now: now)
             step.changes = [BridgeChange(id: accountId, label: account.displayName,
                                          before: archived ? "active" : "archived", after: archived ? "archived" : "active")]
             step.undo = [.archiveAccount(accountId: accountId, archived: !archived)]
             step.message = archived ? "Hidden from lists and totals; its bank no longer syncs it" : "Back in lists and totals"
+            if let impact, !impact.isEmpty {
+                step.message += ". \(impact.summary) \(toCents(impact.totalEur)) EUR in all."
+            }
 
         case .importFundOrders(let accountId, let ordersCsv, let movementsCsv, let heldUnits):
             let account = try fetchOne(Account.self, accountId, "account", in: ctx)
