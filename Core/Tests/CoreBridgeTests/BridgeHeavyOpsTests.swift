@@ -189,9 +189,27 @@ final class BridgeHeavyOpsTests: XCTestCase {
 
         let archived = run([.archiveAccount(accountId: f.broker.id, archived: true)], f)
         XCTAssertEqual(archived.ops.first?.status, .applied)
+        XCTAssertEqual(archived.ops.first?.message, "Hidden from lists and totals; its bank no longer syncs it")
         XCTAssertTrue(f.broker.archived)
         _ = run(try XCTUnwrap(archived.undo), f)
         XCTAssertFalse(f.broker.archived)
+    }
+
+    func test_archiving_previewsTheTransfersItUnpairs() throws {
+        let f = try BridgeFixture()
+        let replica = try BridgeReplica(BridgeExport.make(in: f.ctx, appState: BridgeFixture.appState, redact: false, now: now))
+        let preview = try replica.preview(
+            BridgeBatch(summary: "", ops: [.archiveAccount(accountId: f.checking.id, archived: true)]), now: now)
+        let expected = "Hidden from lists and totals; its bank no longer syncs it. "
+            + "Its 2 transfers with Card and Savings are unpaired: 1 counts as income or spending again, "
+            + "and 1 that a transfer route copied there is deleted. 300 EUR in all."
+        XCTAssertEqual(preview.outcome.ops.first?.message, expected)
+        XCTAssertFalse(f.checking.archived, "a preview must not touch the real store")
+
+        let applied = run([.archiveAccount(accountId: f.checking.id, archived: true)], f)
+        XCTAssertEqual(applied.ops.first?.message, expected)
+        XCTAssertTrue(f.mirroredSource.mirrors.isEmpty)
+        XCTAssertEqual(run(try XCTUnwrap(applied.undo), f).ops.first?.message, "Back in lists and totals")
     }
 
     func test_previewListsEveryPastCycleItMoves() throws {
