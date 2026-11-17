@@ -41,25 +41,24 @@ enum ForegroundBankSync {
         }
     }
 
-    // Claude asked for it and the user (or an auto-apply switch) agreed: skip the throttle,
-    // but count the run against it.
+    // Claude asked for it and the user (or an auto-apply switch) agreed: skip the interval, but
+    // not a sync already out, which runs the automations itself.
     @MainActor
     static func runNow(_ ctx: ModelContext, connectionIds: [UUID]?) async {
         guard let signer = try? EBKeychain().loadSigner() else { return }
-        let throttle = CoreLogic.BankSyncThrottle()
-        throttle.markStarted()
         let api = EBClient(tokenProvider: signer)
         await withBackgroundTask("ClaudeBankSync") {
-            if let connectionIds {
-                let wanted = Set(connectionIds)
-                for connection in (try? ctx.fetch(FetchDescriptor<Connection>())) ?? [] where wanted.contains(connection.id) {
-                    _ = try? await CoreLogic.EBSync.sync(connection: connection, api: api, in: ctx)
+            let ran: Void? = await CoreLogic.BankSync.runNow {
+                if let connectionIds {
+                    let wanted = Set(connectionIds)
+                    for connection in (try? ctx.fetch(FetchDescriptor<Connection>())) ?? [] where wanted.contains(connection.id) {
+                        _ = try? await CoreLogic.EBSync.sync(connection: connection, api: api, in: ctx)
+                    }
+                } else {
+                    _ = await CoreLogic.EBSync.syncAll(api: api, in: ctx)
                 }
-            } else {
-                _ = await CoreLogic.EBSync.syncAll(api: api, in: ctx)
             }
-            if !Task.isCancelled { throttle.record() }
-            await AutomationRunner.run(ctx)
+            if ran != nil { await AutomationRunner.run(ctx) }
         }
     }
 }

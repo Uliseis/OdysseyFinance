@@ -170,4 +170,69 @@ final class BankSyncTests: XCTestCase {
         XCTAssertEqual(banks, .notConnected)
         XCTAssertFalse(throttle.isDue())
     }
+
+    // MARK: Asked for (a tap in Settings, or Claude with the user's go-ahead)
+
+    func testASyncAskedForSkipsTheIntervalAndCountsAsARun() async {
+        // Whole seconds, so the stored mark reads back exactly.
+        let earlier = Date(timeIntervalSince1970: (Date.now.timeIntervalSince1970 - 60).rounded())
+        throttle.record(earlier)
+        let result = await CoreLogic.BankSync.runNow(throttle: throttle) { [self] in
+            XCTAssertTrue(CoreLogic.BankSync.isRunning)
+            XCTAssertFalse(throttle.isDue(every: 0), "marked as started before the first call to a bank")
+            XCTAssertEqual(throttle.lastRun, earlier)
+            return 7
+        }
+        XCTAssertEqual(result, 7)
+        XCTAssertFalse(CoreLogic.BankSync.isRunning)
+        XCTAssertGreaterThan(try XCTUnwrap(throttle.lastRun), earlier)
+    }
+
+    func testASyncAskedForWhileOneIsOutDoesntStart() async throws {
+        let ctx = try connectedContext()
+        let api = StubAPI()
+        var asked: Int? = 0
+        var started = false
+        api.whileSessionInFlight = { [self] in
+            asked = await CoreLogic.BankSync.runNow(throttle: throttle) {
+                started = true
+                return 1
+            }
+        }
+        _ = await run(ctx, api: api)
+        XCTAssertNil(asked, "it says the banks are already syncing")
+        XCTAssertFalse(started)
+    }
+
+    func testTheOthersSeeASyncAskedForAsOut() async throws {
+        let ctx = try connectedContext()
+        let api = StubAPI()
+        var banks: CoreLogic.SyncSummary.Banks?
+        _ = await CoreLogic.BankSync.runNow(throttle: throttle) { [self] in
+            banks = await CoreLogic.BankSync.runIfDue(in: ctx, every: 0, throttle: throttle, api: { api })
+        }
+        XCTAssertEqual(banks, .busy)
+        XCTAssertEqual(api.sessions, 0)
+    }
+
+    func testASyncAskedForThatFailsStillCountsAsARun() async {
+        struct BankDown: Error {}
+        do {
+            _ = try await CoreLogic.BankSync.runNow(throttle: throttle) { () async throws -> Int in throw BankDown() }
+            XCTFail("expected the error to come through")
+        } catch {
+            XCTAssertTrue(error is BankDown)
+        }
+        XCTAssertNotNil(throttle.lastRun)
+        XCTAssertFalse(CoreLogic.BankSync.isRunning)
+    }
+
+    func testACancelledSyncAskedForOnlyHoldsTheOthersOffBriefly() async {
+        let task = Task { [self] in await CoreLogic.BankSync.runNow(throttle: throttle) { 1 } }
+        task.cancel()
+        _ = await task.value
+        XCTAssertNil(throttle.lastRun)
+        XCTAssertFalse(throttle.isDue())
+        XCTAssertTrue(throttle.isDue(now: .now.addingTimeInterval(5 * 60)))
+    }
 }
