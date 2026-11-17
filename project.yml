@@ -38,10 +38,13 @@ targets:
         UILaunchScreen:
           UIColorName: LaunchBackground
         NSFaceIDUsageDescription: "Unlock Odyssey Finance with Face ID."
+        # fetch is what BGAppRefreshTask needs, processing BGProcessingTask.
         UIBackgroundModes:
+          - fetch
           - processing
         BGTaskSchedulerPermittedIdentifiers:
           - com.uliseis.odysseyfinance.refresh
+          - com.uliseis.odysseyfinance.investments
         # Target of Vercel/ios-callback.html when a bank app opens the redirect in Safari.
         CFBundleURLTypes:
           - CFBundleURLName: com.uliseis.odysseyfinance.bank-callback

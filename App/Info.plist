@@ -5,6 +5,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.uliseis.odysseyfinance.refresh</string>
+		<string>com.uliseis.odysseyfinance.investments</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -39,6 +40,7 @@
 	<string>Unlock Odyssey Finance with Face ID.</string>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>fetch</string>
 		<string>processing</string>
 	</array>
 	<key>UILaunchScreen</key>
