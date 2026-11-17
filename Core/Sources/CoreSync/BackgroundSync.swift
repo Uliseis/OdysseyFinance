@@ -33,17 +33,22 @@ public enum BackgroundSync {
         }
     }
 
-    public static func schedule(earliestBeginIn seconds: TimeInterval = 3_600) {
+    // Every cold launch books both tasks, so a run already booked is kept rather than pushed
+    // later; a handler's own request is no longer pending, so it books the next.
+    private static func isBooked(_ identifier: String) async -> Bool {
+        await BGTaskScheduler.shared.pendingTaskRequests().contains { $0.identifier == identifier }
+    }
+
+    public static func schedule(earliestBeginIn seconds: TimeInterval = 3_600) async {
+        guard await !isBooked(taskIdentifier) else { return }
         let request = BGProcessingTaskRequest(identifier: taskIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: seconds)
         request.requiresNetworkConnectivity = true
         try? BGTaskScheduler.shared.submit(request)
     }
 
-    // Every cold launch calls this, so a run already booked is kept rather than pushed later.
     public static func scheduleInvestments() async {
-        let pending = await BGTaskScheduler.shared.pendingTaskRequests()
-        let booked = pending.contains { $0.identifier == investmentsTaskIdentifier }
+        let booked = await isBooked(investmentsTaskIdentifier)
         guard let begin = CoreLogic.InvestmentRefresh.backgroundRunToBook(after: .now, alreadyBooked: booked)
         else { return }
         let request = BGAppRefreshTaskRequest(identifier: investmentsTaskIdentifier)
@@ -69,7 +74,7 @@ public enum BackgroundSync {
             await afterSync?(engine.modelContainer)
             await engine.fetchOnLaunch()
             await engine.sendPendingChanges()
-            schedule()
+            await schedule()
             box.task.setTaskCompleted(success: !Task.isCancelled)
         }
         task.expirationHandler = { work.cancel() }
@@ -78,8 +83,7 @@ public enum BackgroundSync {
     private static func handleInvestments(task: BGTask, engine: CloudKitSyncEngine) {
         let box = TaskBox(task: task)
         let work = Task { @MainActor in
-            // First, so a run that expires still has the next one booked. This run's own request
-            // is no longer pending.
+            // First, so a run that expires still has the next one booked.
             await scheduleInvestments()
             try? engine.start()
             await refreshInvestments(engine.modelContainer)
@@ -122,7 +126,7 @@ public enum BackgroundSync {
     @MainActor
     public static func register(engine: CloudKitSyncEngine) {}
 
-    public static func schedule(earliestBeginIn seconds: TimeInterval = 3_600) {}
+    public static func schedule(earliestBeginIn seconds: TimeInterval = 3_600) async {}
 
     public static func scheduleInvestments() async {}
 }
