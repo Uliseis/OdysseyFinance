@@ -65,8 +65,13 @@ enum ForegroundBankSync {
     private static func refresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?, progress: Progress? = nil) async -> String {
         // First, and pushed straight away, so the values leave the phone even when a bank runs
         // long. Independent of Enable Banking: brokers and crypto have their own sources, and an
-        // unconfigured bank connection shouldn't stop them refreshing.
-        let investments = await CoreLogic.InvestmentRefresh.run(in: ctx)
+        // unconfigured bank connection shouldn't stop them refreshing. The refresh is a task of its
+        // own that outlives its callers, so running out of background time stops it explicitly.
+        let investments = await withTaskCancellationHandler {
+            await CoreLogic.InvestmentRefresh.run(in: ctx)
+        } onCancel: {
+            Task { @MainActor in CoreLogic.InvestmentRefresh.cancel() }
+        }
         progress?.investments = investments
         // SaveObserver has queued the values; the nudge doesn't hold the banks up on CloudKit.
         Task { await engine?.sendPendingChanges() }
