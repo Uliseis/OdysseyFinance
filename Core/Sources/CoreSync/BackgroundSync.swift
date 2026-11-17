@@ -69,7 +69,7 @@ public enum BackgroundSync {
         let work = Task { @MainActor in
             try? engine.start()
             await syncEnableBanking(engine.modelContainer)
-            // Same order as the foreground sync, so the push below carries the valuations too.
+            // Before the push below, so it carries the valuations too.
             await refreshInvestments(engine.modelContainer)
             await afterSync?(engine.modelContainer)
             await engine.fetchOnLaunch()

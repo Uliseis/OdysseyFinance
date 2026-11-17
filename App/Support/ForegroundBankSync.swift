@@ -13,6 +13,13 @@ import CoreSync
 // action, throttled (CoreLogic.BankSyncThrottle) so opening the app twice in a row doesn't
 // hammer the API.
 enum ForegroundBankSync {
+    // The steps done so far, for the Shortcuts action's answer at its deadline.
+    @MainActor
+    final class Progress {
+        var investments: CoreLogic.InvestmentRefresh.Outcome?
+        var banks: CoreLogic.SyncSummary.Banks?
+    }
+
     @MainActor
     static func runIfDue(_ ctx: ModelContext, engine: CloudKitSyncEngine?) async {
         // The Wallet automation launches the app in the background to run the quick-add
@@ -22,25 +29,57 @@ enum ForegroundBankSync {
         let pace = CoreLogic.ForegroundSyncPace()
         guard pace.isDue(), CoreLogic.BankSyncThrottle().isDue(), !CoreLogic.BankSync.isRunning else { return }
         pace.record()
-        await syncAndRefresh(ctx, engine: engine)
+        await withBackgroundTask("ForegroundBankSync") {
+            _ = await refresh(ctx, engine: engine)
+        }
     }
 
-    // The foreground hook and the Shortcuts action share this: banks unless they were tried in
-    // the last 15 minutes, then investments, the automations that follow every sync, and a push.
+    // App Intents get about 30 seconds and one bank can take longer, so the Shortcuts action
+    // answers by the deadline with what's done. The run isn't a child of the action's task, so
+    // answering doesn't cancel it: it carries on in the background time iOS gives the app, then
+    // writes the Claude bridge snapshot so its runs can be checked from the Mac.
+    @MainActor
+    static func syncAndRefresh(
+        _ ctx: ModelContext, engine: CloudKitSyncEngine?, answeringBy deadline: ContinuousClock.Instant
+    ) async -> String {
+        let progress = Progress()
+        let run = Task { @MainActor in
+            await withBackgroundTask("SyncAndRefresh") {
+                let summary = await refresh(ctx, engine: engine, progress: progress)
+                // Forced past the export's 30-second pause, which the write at the deadline started;
+                // an unchanged snapshot is still skipped.
+                if !Task.isCancelled { await ClaudeBridge.exportSnapshot(ctx, force: true) }
+                return summary
+            }
+        }
+        if let summary = await CoreLogic.Deadline.value(of: run, by: deadline) { return summary }
+        // What's done so far reaches the Mac now, in case iOS stops the rest.
+        Task { await ClaudeBridge.exportSnapshot(ctx) }
+        return CoreLogic.SyncSummary.soFar(banks: progress.banks, investments: progress.investments)
+    }
+
+    // The foreground hook and the Shortcuts action share this: investments, then banks unless
+    // they were tried in the last 15 minutes, the automations that follow every sync, and a push.
     // Returns what it did in a line, for the action's answer.
-    @MainActor @discardableResult
-    static func syncAndRefresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?) async -> String {
-        await withBackgroundTask("ForegroundBankSync") {
-            let banks = await CoreLogic.BankSync.runIfDue(in: ctx)
-            // Independent of Enable Banking: brokers and crypto have their own sources, and an
-            // unconfigured bank connection shouldn't stop them refreshing.
-            let investments = await CoreLogic.InvestmentRefresh.run(in: ctx)
+    @MainActor
+    private static func refresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?, progress: Progress? = nil) async -> String {
+        // First, and pushed straight away, so the values leave the phone even when a bank runs
+        // long. Independent of Enable Banking: brokers and crypto have their own sources, and an
+        // unconfigured bank connection shouldn't stop them refreshing.
+        let investments = await CoreLogic.InvestmentRefresh.run(in: ctx)
+        progress?.investments = investments
+        await engine?.sendPendingChanges()
+        // Out of background time: the rest waits for the next run.
+        guard !Task.isCancelled else { return CoreLogic.SyncSummary.soFar(banks: nil, investments: investments) }
+        let banks = await CoreLogic.BankSync.runIfDue(in: ctx)
+        progress?.banks = banks
+        if !Task.isCancelled {
             await AutomationRunner.run(ctx)
             // Rows inserted on the main context push via SaveObserver, but nudge the engine so
             // they leave the device on this run rather than the next save.
             await engine?.sendPendingChanges()
-            return CoreLogic.SyncSummary.text(banks: banks, investments: investments)
         }
+        return CoreLogic.SyncSummary.text(banks: banks, investments: investments)
     }
 
     // Claude asked for it and the user (or an auto-apply switch) agreed: skip the interval, but
@@ -66,14 +105,43 @@ enum ForegroundBankSync {
 }
 
 // A foreground sync that the user backgrounds mid-run was suspended within seconds and left
-// its rows un-post-processed; the assertion buys ~30s to finish.
+// its rows un-post-processed; the assertion buys ~30s to finish. The work runs as a task of its
+// own so that, when that time runs out, it can be cancelled and record the bank runs it cut
+// short as cut off instead of leaving them running. Cancelling the caller cancels it too.
 @MainActor
-func withBackgroundTask<T>(_ name: String, _ body: () async throws -> T) async rethrows -> T {
-    nonisolated(unsafe) var id = UIBackgroundTaskIdentifier.invalid
-    id = UIApplication.shared.beginBackgroundTask(withName: name) {
+func withBackgroundTask<T: Sendable, E: Error>(
+    _ name: String, _ body: @escaping @MainActor () async throws(E) -> T
+) async throws(E) -> T {
+    let work = Task { @MainActor () -> Result<T, E> in
+        do throws(E) { return .success(try await body()) } catch { return .failure(error) }
+    }
+    let assertion = BackgroundAssertion(name) { work.cancel() }
+    defer { assertion.end() }
+    let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+    return try result.get()
+}
+
+@MainActor
+private final class BackgroundAssertion {
+    private var id = UIBackgroundTaskIdentifier.invalid
+
+    init(_ name: String, onExpiry: @escaping @MainActor @Sendable () -> Void) {
+        id = UIApplication.shared.beginBackgroundTask(withName: name) { [self] in
+            onExpiry()
+            // A moment on the main thread for the cancelled work to save what it cut short, ending
+            // well inside the time left: an assertion held past it gets the app killed.
+            let grace = min(1, UIApplication.shared.backgroundTimeRemaining - 1)
+            guard grace > 0 else { return end() }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(grace))
+                end()
+            }
+        }
+    }
+
+    func end() {
+        guard id != .invalid else { return }
         UIApplication.shared.endBackgroundTask(id)
         id = .invalid
     }
-    defer { if id != .invalid { UIApplication.shared.endBackgroundTask(id) } }
-    return try await body()
 }

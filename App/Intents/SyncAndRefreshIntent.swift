@@ -12,15 +12,19 @@ struct SyncAndRefreshIntent: AppIntent {
     static let description = IntentDescription(
         "Syncs your bank accounts and refreshes the value of investments priced live. Banks are skipped if they were tried in the last 15 minutes.")
     static let openAppWhenRun = false
+    // iOS gives an action about 30 seconds, counted from before perform starts. A bank still
+    // syncing then carries on in the background (LongRunningIntent needs the iOS 27 SDK).
+    static let answerWithin: Duration = .seconds(25)
 
     @Dependency private var container: ModelContainer
     @Dependency private var engine: CloudKitSyncEngine
 
-    // Awaits all of it: iOS keeps the app running only until perform returns.
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        let deadline = ContinuousClock.now + Self.answerWithin
         if CloudKitGate.isAvailable { try? engine.start() }
-        let summary = await ForegroundBankSync.syncAndRefresh(container.mainContext, engine: engine)
+        let summary = await ForegroundBankSync.syncAndRefresh(
+            container.mainContext, engine: engine, answeringBy: deadline)
         return .result(dialog: "\(summary)")
     }
 }
