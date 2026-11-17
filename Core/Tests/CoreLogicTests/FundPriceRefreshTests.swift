@@ -655,7 +655,7 @@ final class FundPriceRefreshTests: XCTestCase {
 
         let outcome = await run(ctx)
 
-        XCTAssertEqual(outcome.failures, ["Funds: the EODHD key can't be read while the iPhone is locked; not saved."])
+        XCTAssertEqual(outcome.failures, ["Funds: the EODHD key can't be read until the iPhone is unlocked after a restart; not saved."])
         XCTAssertEqual(source.lookups + source.latests, [])
     }
 

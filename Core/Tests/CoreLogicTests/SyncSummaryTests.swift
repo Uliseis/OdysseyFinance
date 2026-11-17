@@ -43,8 +43,8 @@ final class SyncSummaryTests: XCTestCase {
     }
 
     func testAnUnreadableBankKey() {
-        XCTAssertEqual(Summary.text(banks: .noKey("The bank key can't be read while the iPhone is locked"), investments: valued(1)),
-                       "Investments refreshed (1). Banks not synced. The bank key can't be read while the iPhone is locked.")
+        XCTAssertEqual(Summary.text(banks: .noKey("The bank key can't be read until the iPhone is unlocked after a restart"), investments: valued(1)),
+                       "Investments refreshed (1). Banks not synced. The bank key can't be read until the iPhone is unlocked after a restart.")
         XCTAssertEqual(Summary.text(banks: .noKey("Add the Enable Banking key in Settings"), investments: valued(1)),
                        "Investments refreshed (1). Banks not synced. Add the Enable Banking key in Settings.")
     }

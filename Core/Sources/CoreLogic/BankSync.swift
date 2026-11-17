@@ -101,7 +101,7 @@ extension CoreLogic {
         static func keyProblem(_ error: any Error) -> String {
             switch error as? EBKeyError {
             case .notFound: "Add the Enable Banking key in Settings"
-            case .keychain(errSecInteractionNotAllowed): "The bank key can't be read while the iPhone is locked"
+            case .keychain(errSecInteractionNotAllowed): "The bank key can't be read until the iPhone is unlocked after a restart"
             default: "The bank key couldn't be read (\(error))"
             }
         }
