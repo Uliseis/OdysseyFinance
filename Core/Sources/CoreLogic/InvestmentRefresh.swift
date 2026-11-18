@@ -367,13 +367,7 @@ extension CoreLogic {
             }
             let note = "auto: \(fundsSource)"
             // False when not saved, with the failure said.
-            func record(_ market: Decimal, cash: Decimal, asOf: Date, previous: Decimal?) -> Bool {
-                if isImplausible(market, previous: previous) {
-                    outcome.failures.append(
-                        "\(name): \(Self.plain(market)) is far from the last "
-                        + "reading (\(Self.plain(previous ?? 0))). Check the quantity; not saved.")
-                    return false
-                }
+            func record(_ market: Decimal, cash: Decimal, asOf: Date) -> Bool {
                 do {
                     try Investments.recordValuation(
                         account: fund.account, marketValueEur: market, cashValueEur: cash,
@@ -414,7 +408,14 @@ extension CoreLogic {
                         continue
                     }
                 }
-                guard record(market, cash: value.cash, asOf: value.asOf, previous: previous) else {
+                if isImplausible(market, previous: previous) {
+                    outcome.failures.append(
+                        "\(name): \(Self.plain(market)) is far from the last "
+                        + "reading (\(Self.plain(previous ?? 0))). Check the quantity; not saved.")
+                    refused = true
+                    break
+                }
+                guard record(market, cash: value.cash, asOf: value.asOf) else {
                     refused = true
                     break
                 }
@@ -427,6 +428,7 @@ extension CoreLogic {
             // by when it ran, is corrected. Weekend values from such a build too: the rule values
             // any day. Typed values, Claude's and days that can't be valued now are left as they are.
             var corrected: [Date] = []
+            var leftAlone: [String] = []
             let firstRevisited = weekday(fundRevisitDays, before: through)
             let recent = Dictionary(grouping: fund.valuations) { Funds.dayStart($0.asOf) }
                 .filter { $0.key >= firstRevisited && $0.key <= through && !days.contains($0.key) }
@@ -440,8 +442,16 @@ extension CoreLogic {
                 if existing.marketValueEur == market, existing.cashValueEur == value.cash, existing.asOf == value.asOf {
                     continue
                 }
-                let before = fund.valuations.last { Funds.dayStart($0.asOf) < day }?.marketValueEur
-                guard record(market, cash: value.cash, asOf: value.asOf, previous: before) else {
+                // Each day against its own reading before, so one refusal doesn't hold back the rest.
+                // The value it would replace stays, so that's no failure.
+                if let reading = fund.valuations.last(where: { Funds.dayStart($0.asOf) < day }),
+                   isImplausible(market, previous: reading.marketValueEur) {
+                    let readingDay = Funds.dayStart(reading.asOf)
+                    leftAlone.append("\(name): left the \(Funds.dayRange(day...day)) value as it was; the new one "
+                        + "looks implausible next to the \(Funds.dayRange(readingDay...readingDay)) reading.")
+                    continue
+                }
+                guard record(market, cash: value.cash, asOf: value.asOf) else {
                     refused = true
                     break
                 }
@@ -458,6 +468,7 @@ extension CoreLogic {
                 notices.append("\(name): corrected \(count(corrected.count, "recent value")) "
                     + "(\(Funds.dayRange(first...last))) with newer prices.")
             }
+            notices += leftAlone
             if capped, let lastDay {
                 notices.append("\(name): the gap since \(Funds.dayRange(lastDay...lastDay)) is longer than "
                     + "\(fundGapDays) weekdays; only the latest \(fundGapDays) were filled.")
