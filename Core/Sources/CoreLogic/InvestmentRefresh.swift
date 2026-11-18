@@ -218,7 +218,8 @@ extension CoreLogic {
             let legs: [Investments.ContributionLeg]
             let valuations: [PortfolioValuation]
             let held: [String]
-            // Held now or traded since the last value, so held on some day still to be valued.
+            // Held now, or traded since the last value or the first day a refresh may correct, so
+            // held on some day still to be valued or corrected.
             let priced: Set<String>
 
             var lastDay: Date? { valuations.last.map { Funds.dayStart($0.asOf) } }
@@ -241,6 +242,10 @@ extension CoreLogic {
                 for account in accounts { outcome.failures.append("\(account.displayName): \(why); not saved.") }
                 return
             }
+            let today = Funds.dayStart(now)
+            // The first day a refresh may correct: fundRevisitDays weekdays before the newest price
+            // day, which is refused past fundPriceMaxBusinessDays old (one weekday more from a weekend).
+            let firstCorrected = weekday(fundRevisitDays + fundPriceMaxBusinessDays + 1, before: today)
             var ready: [FundAccount] = []
             for account in accounts {
                 do {
@@ -252,7 +257,8 @@ extension CoreLogic {
                     let valuations = try Investments.listValuations(for: [account.id], in: ctx)
                     let lastDay = valuations.last.map { Funds.dayStart($0.asOf) }
                     let held = Funds.positions(trades).filter { $0.units > 0 }.map(\.isin)
-                    let traded = trades.filter { t in lastDay.map { Funds.dayStart(t.date) > $0 } ?? false }.map(\.isin)
+                    let after = lastDay.map { min($0, firstCorrected) }
+                    let traded = trades.filter { t in after.map { Funds.dayStart(t.date) > $0 } ?? false }.map(\.isin)
                     ready.append(FundAccount(
                         account: account, trades: trades, ledger: ledger,
                         legs: try Investments.listContributionLegs(for: [account.id], in: ctx),
@@ -262,10 +268,6 @@ extension CoreLogic {
                 }
             }
 
-            let today = Funds.dayStart(now)
-            // The first day a refresh may correct: fundRevisitDays weekdays before the newest price
-            // day, which is refused past fundPriceMaxBusinessDays old (one weekday more from a weekend).
-            let firstCorrected = weekday(fundRevisitDays + fundPriceMaxBusinessDays + 1, before: today)
             // By ISIN: a week before the oldest last value among the accounts that need its prices,
             // or before the first day they may correct.
             var since: [String: Date] = [:]
