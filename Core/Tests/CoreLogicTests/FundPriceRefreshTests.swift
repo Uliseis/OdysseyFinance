@@ -1197,6 +1197,34 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(values.map(\.cashValueEur), [d("25.5"), d("125.5"), d("125.5")])
     }
 
+    // C bought on Monday the 4th for 30 and sold on Monday the 11th for 31, before the last value
+    // of Tuesday the 12th: its prices are still fetched for the days it was held.
+    func testAFundSoldBeforeTheLastValueIsPricedForTheDaysItCanCorrect() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx, cashAnchor: d("125.5"))
+        ctx.insert(FundTrade(account: acc, isin: c, tradeDate: day(4), side: .buy, units: 3, amountEur: 30))
+        ctx.insert(FundTrade(account: acc, isin: c, tradeDate: day(11), side: .sell, units: 3, amountEur: 31))
+        try ctx.save()
+        try addValue(acc, ctx, on: 8, "200", cash: "95.5")
+        try addValue(acc, ctx, on: 12, "204.5", cash: "126.5")
+        let open = [4, 5, 6, 7, 8, 11, 12, 13]
+        source.infos[c] = FundInfo(isin: c, name: "Example Fund C", currency: "EUR")
+        source.series[a] = prices(a, open.map { ($0, "7") })
+        source.series[b] = prices(b, open.map { ($0, "2") })
+        source.series[c] = prices(c, open.map { ($0, "10") })
+
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(source.latests, [a, b, c])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 1 day (13 Mar).",
+            "Funds: corrected 1 recent value (8 Mar) with newer prices.",
+        ])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [d("203.5"), d("204.5"), d("204.5")],
+                       "70 + 8 + 3 × 10 + 95.50 on the 8th")
+    }
+
     // Saturday the 9th, valued by an older build when it ran: the rule values any day, here with
     // Friday's prices.
     func testARecentAutomaticValueOnAWeekendIsCorrectedToo() async throws {
