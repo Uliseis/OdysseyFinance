@@ -388,6 +388,8 @@ extension CoreLogic {
             var previous = days.first.flatMap { first in
                 fund.valuations.last { Funds.dayStart($0.asOf) < first }?.marketValueEur
             }
+            // Of the days filled, only the last value's can already hold any.
+            let onLastDay = Array(fund.valuations.reversed().prefix { Funds.dayStart($0.asOf) == lastDay })
             var recorded: [Date] = []
             var unpriced: [Date] = []
             var missing: Set<String> = []
@@ -401,9 +403,10 @@ extension CoreLogic {
                     continue
                 }
                 guard market > 0 else { continue }
-                if let existing = fund.valuations.last, Funds.dayStart(existing.asOf) == day {
-                    // Typed in or sent by Claude: someone meant that figure for that day.
-                    guard existing.notes?.hasPrefix(note) == true else {
+                if day == lastDay {
+                    // Typed in or sent by Claude: someone meant that figure for that day. Beside
+                    // another value, saving could replace either.
+                    guard onLastDay.count == 1, let existing = onLastDay.first, existing.notes?.hasPrefix(note) == true else {
                         kept = day
                         continue
                     }
