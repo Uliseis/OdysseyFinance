@@ -805,6 +805,27 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [98, 99])
     }
 
+    // Saving would replace whichever of the day's values came first, maybe the typed one.
+    func testANewestPriceDayWithATypedAndAnAutomaticValueIsKept() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(12).addingTimeInterval(8 * 3600), marketValueEur: 98,
+                                      notes: "From the broker's statement", updatedAt: day(12)))
+        ctx.insert(PortfolioValuation(account: acc, asOf: day(12).addingTimeInterval(9 * 3600), marketValueEur: 99,
+                                      notes: "auto: funds", updatedAt: day(12)))
+        try ctx.save()
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.updated, [])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: kept the value entered on 12 Mar."])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.marketValueEur), [98, 99])
+        XCTAssertEqual(values.map(\.notes), ["From the broker's statement", "auto: funds"])
+        XCTAssertEqual(values.map(\.updatedAt), [day(12), day(12)], "nothing written")
+    }
+
     func testAValueDatedAfterTheNewestPricesIsLeftAlone() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
