@@ -706,7 +706,8 @@ final class FundPriceRefreshTests: XCTestCase {
                        "10 × A + 4 × B + cash; 12 units of A from the 7th")
         XCTAssertEqual(auto.map(\.cashValueEur), [d("25.5"), d("125.5"), d("110.5"), d("110.5"), d("110.5")])
         XCTAssertEqual(Set(auto.map(\.notes)), ["auto: funds"])
-        XCTAssertEqual(source.sinces, [a: day(25, month: 2), b: day(25, month: 2)], "from a week before the last value")
+        XCTAssertEqual(source.sinces, [a: day(15, month: 2), b: day(15, month: 2)],
+                       "from a week before the first day a refresh may correct, earlier than the last value")
         XCTAssertEqual(cache.cache.funds[a]?.history.count, 6)
     }
 
@@ -978,6 +979,278 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertTrue(outcome.updated.isEmpty)
         XCTAssertTrue(outcome.failures.contains { $0.contains("far from the last") }, "\(outcome.failures)")
         XCTAssertEqual(try valuations(acc, ctx).count, 1)
+    }
+
+    // MARK: - Recent values corrected
+
+    private var thursday: Date { day(14).addingTimeInterval(9 * 3600) }
+
+    // A value saved `hours` past the start of its day, as a refresh writes it unless notes say otherwise.
+    private func addValue(
+        _ acc: Account, _ ctx: ModelContext, on dd: Int, hours: Double = 0, _ eur: String,
+        cash: String? = "25.5", notes: String? = "auto: funds"
+    ) throws {
+        ctx.insert(PortfolioValuation(
+            account: acc, asOf: day(dd).addingTimeInterval(hours * 3600), marketValueEur: d(eur),
+            cashValueEur: cash.map(d), notes: notes, createdAt: day(dd), updatedAt: day(dd)))
+        try ctx.save()
+    }
+
+    // An older build valued Monday the 11th and Tuesday the 12th when it ran, with Friday's
+    // prices; Friday the 8th is right.
+    private func makeOldBuildValues(_ ctx: ModelContext) throws -> Account {
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 8, "103.5")
+        try addValue(acc, ctx, on: 11, hours: 9.25, "103.5")
+        try addValue(acc, ctx, on: 12, hours: 7.5, "103.5")
+        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2"), (13, "7.3")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2.01"), (12, "2.02"), (13, "2.03")])
+        return acc
+    }
+
+    func testRecentAutomaticValuesAreRecalculatedWithTheirOwnDaysPrices() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeOldBuildValues(ctx)
+
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.updated, [acc.id])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 1 day (13 Mar).",
+            "Funds: corrected 2 recent values (11–12 Mar) with newer prices.",
+        ])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(8), day(11), day(12), day(13)], "at the start of each day")
+        XCTAssertEqual(values.map(\.marketValueEur), [d("103.5"), d("104.54"), d("105.58"), d("106.62")],
+                       "10 × A + 4 × B of each day + 25.50")
+        XCTAssertEqual(Set(values.map(\.notes)), ["auto: funds"])
+        XCTAssertEqual(values[0].updatedAt, day(8), "a value that was right isn't written again")
+        XCTAssertEqual(source.sinces, [a: day(19, month: 2), b: day(19, month: 2)],
+                       "a week before the first day a refresh may correct")
+    }
+
+    func testASecondRunTheSameDayCorrectsNothingAgain() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeOldBuildValues(ctx)
+        _ = await run(ctx, at: thursday)
+        let written = try valuations(acc, ctx).map(\.updatedAt)
+        let lookups = source.lookups, latests = source.latests
+
+        let outcome = await run(ctx, at: thursday.addingTimeInterval(6 * 3600))
+
+        XCTAssertEqual(source.lookups, lookups)
+        XCTAssertEqual(source.latests, latests)
+        XCTAssertEqual(outcome.updated, [])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: no new prices since 13 Mar."])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.updatedAt), written, "nothing written")
+    }
+
+    // B publishes a day after A, so the 12th is first valued with B's price of the 11th.
+    func testADayValuedWithALateFundsPreviousPriceIsCorrectedWhenItsOwnArrives() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        source.series[a] = prices(a, [(11, "7"), (12, "7.1")])
+        source.series[b] = prices(b, [(11, "2")])
+        _ = await run(ctx)
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [d("104.5")], "10 × 7.1 + 4 × 2 + 25.50")
+
+        source.series[a] = prices(a, [(11, "7"), (12, "7.1"), (13, "7.2")])
+        source.series[b] = prices(b, [(11, "2"), (12, "2.05")])
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 1 day (13 Mar).",
+            "Funds: corrected 1 recent value (12 Mar) with newer prices.",
+        ])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(12), day(13)])
+        XCTAssertEqual(values.map(\.marketValueEur), [d("104.7"), d("105.7")], "B at 2.05 from the 12th")
+    }
+
+    // Typed in, or sent by Claude: someone meant that figure for that day.
+    func testValuesTypedOrSentByClaudeInTheLastWeekAreLeftAsTheyAre() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 11, hours: 22, "99", cash: nil, notes: nil)
+        try addValue(acc, ctx, on: 12, "98", notes: "history (EODHD)")
+        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2"), (13, "7.3")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2.01"), (12, "2.02"), (13, "2.03")])
+
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (13 Mar)."])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.marketValueEur), [99, 98, d("106.62")])
+        XCTAssertEqual(values.map(\.asOf), [day(11).addingTimeInterval(22 * 3600), day(12), day(13)])
+        XCTAssertEqual(values.map(\.notes), [nil, "history (EODHD)", "auto: funds"])
+    }
+
+    // The newest price day is Wednesday the 13th, so the last seven weekdays start on Monday the 4th.
+    func testOnlyTheLastSevenWeekdaysUpToTheNewestPriceDayAreCorrected() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 1, "90")
+        try addValue(acc, ctx, on: 4, hours: 9, "90")
+        let open = [1, 4, 5, 6, 7, 8, 11, 12, 13]
+        source.series[a] = prices(a, open.map { ($0, "7.1") })
+        source.series[b] = prices(b, open.map { ($0, "2") })
+
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 7 days (5–13 Mar).",
+            "Funds: corrected 1 recent value (4 Mar) with newer prices.",
+        ])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.first?.marketValueEur, 90, "older than the last seven weekdays")
+        XCTAssertEqual(values.first?.updatedAt, day(1))
+        XCTAssertEqual(values.dropFirst().map(\.asOf), [4, 5, 6, 7, 8, 11, 12, 13].map { day($0) })
+        XCTAssertEqual(Set(values.dropFirst().map(\.marketValueEur)), [d("104.5")])
+    }
+
+    // Written by a refresh that dated values by the time it ran: Wednesday's is after the newest
+    // prices, of Tuesday the 12th.
+    func testAValueAfterTheNewestPricesIsLeftAloneWhileTheOnesBeforeAreCorrected() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 12, hours: 8, "103.5")
+        try addValue(acc, ctx, on: 13, hours: 8, "103.5")
+        source.series[a] = prices(a, [(11, "7.1"), (12, "7.2")])
+        source.series[b] = prices(b, [(11, "2"), (12, "2")])
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.updated, [acc.id])
+        XCTAssertEqual(outcome.notices, ["Funds: corrected 1 recent value (12 Mar) with newer prices."])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(12), day(13).addingTimeInterval(8 * 3600)])
+        XCTAssertEqual(values.map(\.marketValueEur), [d("105.5"), d("103.5")])
+    }
+
+    func testARecentDayThatCantBeValuedNowIsLeftAsItIs() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 12, "90")
+        source.series[a] = prices(a, [1, 4, 5, 6, 7, 8, 11, 12, 13].map { ($0, "7") })
+        source.series[b] = prices(b, [(1, "2"), (4, "2"), (13, "2")])
+
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (13 Mar)."])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [90, d("103.5")],
+                       "B has no price in the week before the 12th, and a total without it isn't written")
+    }
+
+    // 100 paid in at 10:00 on Tuesday the 12th, which the older build missed; Monday's amount was
+    // right but its time wasn't.
+    func testACorrectedValueIsInCentsAndDatedLikeANewOne() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 11, hours: 9, "104.73")
+        try addValue(acc, ctx, on: 12, hours: 9, "104.73")
+        _ = S.makeTx(ctx, account: acc, amount: 100, direction: .credit,
+                     bookedAt: day(12).addingTimeInterval(10 * 3600), isTransfer: true)
+        try ctx.save()
+        source.series[a] = prices(a, [(8, "7"), (11, "7.12345"), (12, "7.12345"), (13, "7.12345")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2"), (12, "2"), (13, "2")])
+
+        let outcome = await run(ctx, at: thursday)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 1 day (13 Mar).",
+            "Funds: corrected 2 recent values (11–12 Mar) with newer prices.",
+        ])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(11), day(12).addingTimeInterval(10 * 3600), day(13)],
+                       "the start of the day, or the transfer booked that day")
+        XCTAssertEqual(values.map(\.marketValueEur), [d("104.73"), d("204.73"), d("204.73")],
+                       "71.2345 + 8 + cash, in cents")
+        XCTAssertEqual(values.map(\.cashValueEur), [d("25.5"), d("125.5"), d("125.5")])
+    }
+
+    // Saturday the 9th, valued by an older build when it ran: the rule values any day, here with
+    // Friday's prices.
+    func testARecentAutomaticValueOnAWeekendIsCorrectedToo() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 9, hours: 10, "90")
+        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2"), (12, "2")])
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 2 days (11–12 Mar).",
+            "Funds: corrected 1 recent value (9 Mar) with newer prices.",
+        ])
+        let values = try valuations(acc, ctx)
+        XCTAssertEqual(values.map(\.asOf), [day(9), day(11), day(12)])
+        XCTAssertEqual(values.map(\.marketValueEur), [d("103.5"), d("104.5"), d("105.5")])
+    }
+
+    // Saving would replace whichever of the day's values came first, maybe the typed one.
+    func testADayWithMoreThanOneValueIsLeftAsItIs() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 11, hours: 9, "90")
+        try addValue(acc, ctx, on: 11, hours: 20, "91", notes: "From the broker's statement")
+        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2"), (12, "2")])
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (12 Mar)."])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [90, 91, d("105.5")])
+    }
+
+    // Against the newest reading before the day being corrected.
+    func testTheImplausibleValueGuardAppliesToCorrections() async throws {
+        let ctx = try S.makeContext()
+        let acc = try makeAccount(ctx)
+        try addValue(acc, ctx, on: 8, "1", notes: nil)
+        try addValue(acc, ctx, on: 11, "104")
+        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2"), (12, "2")])
+
+        let outcome = await run(ctx)
+
+        XCTAssertEqual(outcome.failures, ["Funds: 104.5 EUR is far from the last reading (1 EUR). Check the quantity; not saved."])
+        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (12 Mar)."])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [1, 104, d("105.5")])
+    }
+
+    func testAutomaticValuesFromOtherSourcesAreNotCorrected() async throws {
+        let ctx = try S.makeContext()
+        _ = try makeAccount(ctx)
+        let coin = Account(externalId: "c", type: .broker, institution: "R", name: "Crypto", currency: "EUR",
+                           liveValueSource: "crypto:bitcoin", assetQuantity: d("0.5"))
+        let stocks = Account(externalId: "t", type: .broker, institution: "T", name: "Stocks", currency: "EUR",
+                             liveValueSource: R.trading212Source)
+        ctx.insert(coin)
+        ctx.insert(stocks)
+        try ctx.save()
+        try addValue(coin, ctx, on: 11, hours: 9, "90", cash: nil, notes: "auto: crypto:bitcoin")
+        try addValue(coin, ctx, on: 12, hours: 9, "91", cash: nil, notes: "auto: crypto:bitcoin")
+        try addValue(stocks, ctx, on: 12, hours: 9, "92", notes: "auto: t212")
+        let source = self.source!
+
+        let outcome = await R.run(in: ctx, keychain: keys!, crypto: StubCoins(price: 200),
+                                  fundPrices: { _ in source }, fundPriceCache: cache, now: now)
+
+        XCTAssertEqual(outcome.failures, ["Trading 212: add the API key in Settings"])
+        XCTAssertEqual(try valuations(coin, ctx).map(\.marketValueEur), [90, 91, 100])
+        XCTAssertEqual(try valuations(coin, ctx).map(\.asOf),
+                       [day(11).addingTimeInterval(9 * 3600), day(12).addingTimeInterval(9 * 3600), now])
+        XCTAssertEqual(try valuations(stocks, ctx).map(\.marketValueEur), [92])
     }
 }
 

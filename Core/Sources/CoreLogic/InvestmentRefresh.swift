@@ -34,6 +34,9 @@ extension CoreLogic {
         static let fundJumpLimit = Decimal(string: "0.15")!
         // Weekdays valued in one refresh; a longer gap since the last value keeps the latest ones.
         static let fundGapDays = 60
+        // Weekdays before the newest price day whose automatic values are valued again, so a
+        // fund's late price corrects the days valued at its previous one.
+        static let fundRevisitDays = 7
         // Daily prices older than this leave the cache, however far back a request reached.
         static let fundHistoryDays = 400
 
@@ -222,7 +225,8 @@ extension CoreLogic {
         }
 
         // Every funds account is valued, after refreshing the prices, on each weekday since its
-        // last valuation up to its newest fund price, dated by the prices rather than the refresh.
+        // last valuation up to its newest fund price, dated by the prices rather than the refresh,
+        // and its automatic values of the week before are valued again.
         @MainActor
         private static func refreshFunds(
             _ accounts: [Account], in ctx: ModelContext, keychain: any MarketKeys,
@@ -259,11 +263,15 @@ extension CoreLogic {
             }
 
             let today = Funds.dayStart(now)
-            // By ISIN: a week before the oldest last value among the accounts that need its prices.
+            // The first day a refresh may correct: fundRevisitDays weekdays before the newest price
+            // day, which is refused past fundPriceMaxBusinessDays old (one weekday more from a weekend).
+            let firstCorrected = weekday(fundRevisitDays + fundPriceMaxBusinessDays + 1, before: today)
+            // By ISIN: a week before the oldest last value among the accounts that need its prices,
+            // or before the first day they may correct.
             var since: [String: Date] = [:]
             for fund in ready {
                 guard let lastDay = fund.lastDay else { continue }
-                let from = lastDay.addingTimeInterval(-7 * 86_400)
+                let from = min(lastDay, firstCorrected).addingTimeInterval(-7 * 86_400)
                 for isin in fund.priced { since[isin] = min(since[isin] ?? from, from) }
             }
             let refresh = await refreshPrices(
@@ -334,76 +342,118 @@ extension CoreLogic {
 
             // Every weekday after the last value up to the newest price, then that day itself: an
             // automatic value already on it is replaced when it differs. Without funds held, cash
-            // is known today.
+            // is known today. A last value after the newest price leaves nothing to fill.
             let through = min(newest.max() ?? today, until ?? .distantFuture)
             if !awaiting.isEmpty {
                 outcome.failures.append("\(name): \(awaiting.joined(separator: "; ")); no value after \(Funds.dayRange(through...through)).")
             }
             let lastDay = fund.lastDay
-            if let lastDay, through < lastDay {
-                return ["\(name): no new prices since \(Funds.dayRange(lastDay...lastDay))."]
+            var days: [Date] = []
+            if lastDay.map({ $0 <= through }) ?? true {
+                days = lastDay.map { $0 == through ? [] : weekdays(after: $0, before: through) } ?? []
+                days.append(through)
             }
-            var days = lastDay.map { $0 == through ? [] : weekdays(after: $0, before: through) } ?? []
-            days.append(through)
             let capped = days.count > fundGapDays
             days = Array(days.suffix(fundGapDays))
 
             let prices = cache.funds.compactMapValues { $0.currency == "EUR" ? $0.dailyPrices : nil }
-            var previous = fund.valuations.last { Funds.dayStart($0.asOf) < days[0] }?.marketValueEur
+            // The day's value, the same for a new value and a corrected one: in cents, and dated
+            // late enough to include the transfers booked that day, so Investments doesn't add a
+            // timed one on top again. No market value when a fund held that day has no price.
+            func valued(_ day: Date) -> (market: Decimal?, missing: [String], cash: Decimal, asOf: Date) {
+                let value = Funds.value(on: day, trades: fund.trades, prices: prices, cash: fund.ledger)
+                return (value.valueEur.map(Funds.cents), value.missingISINs, Funds.cents(fund.ledger.cash(on: day)),
+                        fund.legs.map(\.bookedAt).filter { Funds.dayStart($0) == day }.max() ?? day)
+            }
             let note = "auto: \(fundsSource)"
+            // False when not saved, with the failure said.
+            func record(_ market: Decimal, cash: Decimal, asOf: Date, previous: Decimal?) -> Bool {
+                if isImplausible(market, previous: previous) {
+                    outcome.failures.append(
+                        "\(name): \(Self.plain(market)) is far from the last "
+                        + "reading (\(Self.plain(previous ?? 0))). Check the quantity; not saved.")
+                    return false
+                }
+                do {
+                    try Investments.recordValuation(
+                        account: fund.account, marketValueEur: market, cashValueEur: cash,
+                        asOf: asOf, notes: note, in: ctx, now: now)
+                    return true
+                } catch {
+                    outcome.failures.append("\(name): \(error)")
+                    return false
+                }
+            }
+
+            var previous = days.first.flatMap { first in
+                fund.valuations.last { Funds.dayStart($0.asOf) < first }?.marketValueEur
+            }
             var recorded: [Date] = []
             var unpriced: [Date] = []
             var missing: Set<String> = []
             var refused = false
             var kept: Date?
             for day in days {
-                let value = Funds.value(on: day, trades: fund.trades, prices: prices, cash: fund.ledger)
-                guard let total = value.valueEur else {
+                let value = valued(day)
+                guard let market = value.market else {
                     unpriced.append(day)
-                    missing.formUnion(value.missingISINs)
+                    missing.formUnion(value.missing)
                     continue
                 }
-                let market = Funds.cents(total)
-                let cash = Funds.cents(fund.ledger.cash(on: day))
                 guard market > 0 else { continue }
-                // The value includes the transfers booked on its day, so it's dated late enough
-                // that Investments doesn't add a timed one on top again.
-                let asOf = fund.legs.map(\.bookedAt).filter { Funds.dayStart($0) == day }.max() ?? day
                 if let existing = fund.valuations.last, Funds.dayStart(existing.asOf) == day {
                     // Typed in or sent by Claude: someone meant that figure for that day.
                     guard existing.notes?.hasPrefix(note) == true else {
                         kept = day
                         continue
                     }
-                    if existing.marketValueEur == market, existing.cashValueEur == cash, existing.asOf == asOf {
+                    if existing.marketValueEur == market, existing.cashValueEur == value.cash, existing.asOf == value.asOf {
                         continue
                     }
                 }
-                if isImplausible(market, previous: previous) {
-                    outcome.failures.append(
-                        "\(name): \(Self.plain(market)) is far from the last "
-                        + "reading (\(Self.plain(previous ?? 0))). Check the quantity; not saved.")
+                guard record(market, cash: value.cash, asOf: value.asOf, previous: previous) else {
                     refused = true
                     break
                 }
-                do {
-                    try Investments.recordValuation(
-                        account: fund.account, marketValueEur: market, cashValueEur: cash,
-                        asOf: asOf, notes: note, in: ctx, now: now)
-                    recorded.append(day)
-                    previous = market
-                } catch {
-                    outcome.failures.append("\(name): \(error)")
+                recorded.append(day)
+                previous = market
+            }
+
+            // The automatic values of the last weekdays up to the newest price day are valued again,
+            // so a day valued before a late fund's own price arrived, or by a build that dated values
+            // by when it ran, is corrected. Weekend values from such a build too: the rule values
+            // any day. Typed values, Claude's and days that can't be valued now are left as they are.
+            var corrected: [Date] = []
+            let firstRevisited = weekday(fundRevisitDays, before: through)
+            let recent = Dictionary(grouping: fund.valuations) { Funds.dayStart($0.asOf) }
+                .filter { $0.key >= firstRevisited && $0.key <= through && !days.contains($0.key) }
+            for (day, values) in recent.sorted(by: { $0.key < $1.key }) where !refused {
+                // Saving replaces whichever of the day's values it finds first.
+                guard values.count == 1, let existing = values.first, existing.notes?.hasPrefix(note) == true else {
+                    continue
+                }
+                let value = valued(day)
+                guard let market = value.market, market > 0 else { continue }
+                if existing.marketValueEur == market, existing.cashValueEur == value.cash, existing.asOf == value.asOf {
+                    continue
+                }
+                let before = fund.valuations.last { Funds.dayStart($0.asOf) < day }?.marketValueEur
+                guard record(market, cash: value.cash, asOf: value.asOf, previous: before) else {
                     refused = true
                     break
                 }
+                corrected.append(day)
             }
 
             var notices: [String] = []
+            if !recorded.isEmpty || !corrected.isEmpty { outcome.updated.append(fund.account.id) }
             if let first = recorded.first, let last = recorded.last {
-                outcome.updated.append(fund.account.id)
                 notices.append("\(name): values recorded for \(count(recorded.count, "day")) "
                     + "(\(Funds.dayRange(first...last))).")
+            }
+            if let first = corrected.first, let last = corrected.last {
+                notices.append("\(name): corrected \(count(corrected.count, "recent value")) "
+                    + "(\(Funds.dayRange(first...last))) with newer prices.")
             }
             if capped, let lastDay {
                 notices.append("\(name): the gap since \(Funds.dayRange(lastDay...lastDay)) is longer than "
@@ -416,7 +466,7 @@ extension CoreLogic {
             }
             if let kept {
                 notices.append("\(name): kept the value entered on \(Funds.dayRange(kept...kept)).")
-            } else if recorded.isEmpty, unpriced.isEmpty, !refused, let lastDay {
+            } else if recorded.isEmpty, corrected.isEmpty, unpriced.isEmpty, !refused, let lastDay {
                 notices.append("\(name): no new prices since \(Funds.dayRange(lastDay...lastDay)).")
             }
             return notices
@@ -656,6 +706,19 @@ extension CoreLogic {
                 if weekday != 1 && weekday != 7 { count += 1 }
             }
             return count
+        }
+
+        // The nth Monday to Friday, UTC, before `day`'s day.
+        private static func weekday(_ n: Int, before day: Date) -> Date {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "UTC")!
+            var current = cal.startOfDay(for: day)
+            var count = 0
+            while count < n {
+                current = cal.date(byAdding: .day, value: -1, to: current)!
+                if !cal.isDateInWeekend(current) { count += 1 }
+            }
+            return current
         }
 
         // Monday to Friday, UTC, after `day` and before `end`'s day.
