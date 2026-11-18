@@ -20,7 +20,9 @@ jobs:
 
   tests:
     name: Core + tools tests
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -34,7 +36,9 @@ jobs:
 
   ios-build:
     name: iOS build
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - name: Generate project
