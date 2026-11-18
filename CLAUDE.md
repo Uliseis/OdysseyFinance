@@ -50,6 +50,7 @@ Each rule is yes/no. "Enforced by" says where; `review` means no machine check y
 | 13 | No AI attribution trailers in commit messages or PRs | guard (per change) |
 | 14 | `*.xcodeproj` is generated: edit `project.yml`, then run `xcodegen generate` | `.gitignore` |
 | 15 | Icon PNGs come from `design/app-icon/make_icon.py`; never edit them by hand | review |
+| 16 | Undo pending SwiftData changes with `ctx.rollbackRefetching()`, never `rollback()`: on iOS 27 a rollback that undid an insert leaves the models it touched reading nil relationships | guard |
 
 ## Read before changing
 - Sync, bank sync, transfers, investments, automations or the Claude bridge: `docs/ARCHITECTURE.md`.

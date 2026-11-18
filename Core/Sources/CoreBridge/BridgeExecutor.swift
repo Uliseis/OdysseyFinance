@@ -63,7 +63,7 @@ public enum BridgeExecutor {
                 try perform(op, &step, in: ctx, now: now)
                 status = step.changes.isEmpty ? .skipped : .applied
             } catch {
-                ctx.rollback()
+                ctx.rollbackRefetching()
                 step.message = "\(error)"
                 step.changes = []
                 status = .failed
