@@ -176,7 +176,7 @@ extension CoreLogic {
                 try ctx.saveTouchingChanges(now: now)
             } catch {
                 // Otherwise the writes stay pending and ride along with the next save.
-                ctx.rollback()
+                ctx.rollbackRefetching()
                 throw error
             }
 

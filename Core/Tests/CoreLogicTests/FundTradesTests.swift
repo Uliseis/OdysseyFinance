@@ -363,10 +363,10 @@ final class FundTradesTests: XCTestCase {
         let ctx = try S.makeContext()
         let acc = try makeInvestmentAccount(ctx)
         let key = "myinvestor:v1:2030-01-20:\(a):10:100#1"
-        // What a failed import leaves on the account instance: an insert the rollback undid.
+        // What a failed import leaves on the account instance: an insert its rollback undid.
         ctx.insert(FundTrade(account: acc, isin: a, tradeDate: utcDay(2030, 1, 20), side: .buy,
                              units: 10, amountEur: 100, importKey: key))
-        ctx.rollback()
+        ctx.rollbackRefetching()
 
         let summary = try T.importOrders(ordersCSV: csv("20/01/2030;\(a);100.00 EUR;10,000;Finalizada"),
                                          movementsCSV: cash([("21/01/2030", "-100")]),

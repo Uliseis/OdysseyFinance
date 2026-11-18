@@ -10,6 +10,9 @@ err() { printf '✗ %s\n' "$1"; [ $# -gt 1 ] && printf '%s\n' "$2" | sed 's/^/  
 hits=$(git grep -n '#Unique' -- Core App)
 [ -n "$hits" ] && err "#Unique is not allowed; composite uniqueness lives in CoreSync (docs/decisions.md)" "$hits"
 
+hits=$(git grep -nE '\.rollback\(\)' -- Core/Sources App ':!Core/Sources/CoreLogic/Rollback.swift')
+[ -n "$hits" ] && err "rollback() leaves relationships reading nil on iOS 27; use rollbackRefetching()" "$hits"
+
 hits=$(git grep -nw 'Double' -- Core/Sources/CoreModel)
 [ -n "$hits" ] && err "Double in CoreModel; money is Decimal" "$hits"
 
