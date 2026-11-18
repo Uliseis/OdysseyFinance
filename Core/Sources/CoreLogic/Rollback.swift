@@ -4,7 +4,8 @@ import SwiftData
 public extension ModelContext {
     // On iOS and macOS 27 a rollback that undoes an insert leaves the saved models the insert
     // pointed at reading nil for their other relationships (an account's group, say) until each
-    // is fetched again. Use this instead of rollback().
+    // is fetched again. Use this instead of rollback(). Neither can undo a delete that cascaded:
+    // SwiftData traps rolling one back, so check before deleting anything with children.
     func rollbackRefetching() {
         let touched = changedModelsArray.map { $0 } + deletedModelsArray.map { $0 }
         rollback()
