@@ -98,7 +98,7 @@ project.yml             XcodeGen spec (the .xcodeproj is generated, not committe
 
 ## Getting started
 
-**Requirements:** macOS 26, Xcode 26 (iOS 26 SDK) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+**Requirements:** macOS 26 or later, Xcode 27 (iOS 27 SDK) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ```sh
 brew install xcodegen
