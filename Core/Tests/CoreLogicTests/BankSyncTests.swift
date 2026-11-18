@@ -226,6 +226,15 @@ final class BankSyncTests: XCTestCase {
         XCTAssertFalse(started)
     }
 
+    func testADueSyncTellsEachBankAsItFinishes() async throws {
+        let ctx = try connectedContext()
+        var told: [[Int]] = []
+        let banks = await CoreLogic.BankSync.runIfDue(in: ctx, throttle: throttle, api: { StubAPI() },
+                                                      banksDone: { told.append([$0, $1]) })
+        XCTAssertEqual(banks, .synced(.init(synced: 1)))
+        XCTAssertEqual(told, [[0, 1], [1, 1]])
+    }
+
     func testTheOthersSeeASyncAskedForAsOut() async throws {
         let ctx = try connectedContext()
         let api = StubAPI()
