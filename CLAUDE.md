@@ -13,8 +13,8 @@ Native iOS personal finance app (SwiftUI, SwiftData, CloudKit) for a single user
 - One suite: `swift test --package-path Core --filter CoreLogicTests.TransfersTests`
 - Importer tests: `swift test --package-path Tools/ImportFromPostgres`
 - Claude MCP server tests: `swift test --package-path Tools/OdysseyMCP`; build with `swift build -c release --package-path Tools/OdysseyMCP` and register with `claude mcp add odyssey -- "$PWD/Tools/OdysseyMCP/.build/release/OdysseyMCP"`
-- Mac bridge helper, which keeps the bridge folder syncing on the Mac (D15): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyBridgeHelper -configuration Release -derivedDataPath build/mac -allowProvisioningUpdates build`, then copy `build/mac/Build/Products/Release/OdysseyBridgeHelper.app` to `~/Applications` and open it once (needs Xcode signed in to the team)
-- iOS build (`swift test` doesn't compile `App/` or iOS-only `CoreSync` code, so run this too): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyFinance -destination 'generic/platform=iOS Simulator' build CODE_SIGNING_ALLOWED=NO`
+- Mac bridge helper, which keeps the bridge folder syncing on the Mac (D15): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyBridgeHelper -configuration Release -derivedDataPath build/DerivedData.noindex -allowProvisioningUpdates build`, then copy `build/DerivedData.noindex/Build/Products/Release/OdysseyBridgeHelper.app` to `~/Applications` and open it once (needs Xcode signed in to the team)
+- iOS build (`swift test` doesn't compile `App/` or iOS-only `CoreSync` code, so run this too): `xcodebuild -project OdysseyFinance.xcodeproj -scheme OdysseyFinance -destination 'generic/platform=iOS Simulator' -derivedDataPath build/DerivedData.noindex build CODE_SIGNING_ALLOWED=NO`
 - Device build: same command with `-destination 'generic/platform=iOS' -allowProvisioningUpdates`
 - Repo guards: `scripts/check-repo.sh [base-ref]`
 - App icon: `python3 design/app-icon/make_icon.py` (needs `rsvg-convert` and Pillow)
@@ -64,3 +64,4 @@ Each rule is yes/no. "Enforced by" says where; `review` means no machine check y
 - `UNUserNotificationCenterDelegate`: implement the completion-handler methods. The async variants crash when a notification is tapped.
 - Schema changes: there is no `VersionedSchema`, so only additive optional attributes migrate automatically. Anything else needs a migration plan first.
 - DEBUG builds open `DevData/financial.store` (a local copy of real data) when it exists. Never publish screenshots or logs from such a build.
+- Keep `-derivedDataPath build/DerivedData.noindex` on every `xcodebuild`. Spotlight lists each built `OdysseyFinance.app` as a Mac app that won't open, and Xcode's default DerivedData keeps a copy for every worktree after the worktree is gone. Spotlight skips `.noindex` folders, and this one is deleted with its worktree.
