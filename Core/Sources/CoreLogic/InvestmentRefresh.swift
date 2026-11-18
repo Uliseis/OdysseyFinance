@@ -715,11 +715,16 @@ extension CoreLogic {
             var count = 0
             while current < last {
                 current = cal.date(byAdding: .day, value: 1, to: current)!
-                // Gregorian weekdays: 1 is Sunday, 7 Saturday.
-                let weekday = cal.component(.weekday, from: current)
-                if weekday != 1 && weekday != 7 { count += 1 }
+                if isWeekday(current, in: cal) { count += 1 }
             }
             return count
+        }
+
+        // By number rather than isDateInWeekend, whose weekend follows the locale.
+        private static func isWeekday(_ day: Date, in cal: Calendar) -> Bool {
+            // Gregorian weekdays: 1 is Sunday, 7 Saturday.
+            let weekday = cal.component(.weekday, from: day)
+            return weekday != 1 && weekday != 7
         }
 
         // The nth Monday to Friday, UTC, before `day`'s day.
@@ -730,7 +735,7 @@ extension CoreLogic {
             var count = 0
             while count < n {
                 current = cal.date(byAdding: .day, value: -1, to: current)!
-                if !cal.isDateInWeekend(current) { count += 1 }
+                if isWeekday(current, in: cal) { count += 1 }
             }
             return current
         }
@@ -743,7 +748,7 @@ extension CoreLogic {
             var current = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: day))!
             var days: [Date] = []
             while current < last {
-                if !cal.isDateInWeekend(current) { days.append(current) }
+                if isWeekday(current, in: cal) { days.append(current) }
                 current = cal.date(byAdding: .day, value: 1, to: current)!
             }
             return days
