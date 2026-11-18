@@ -30,7 +30,8 @@ final class RollbackTests: XCTestCase {
         ctx.rollbackRefetching()
 
         XCTAssertEqual(account.group?.kind, .investment)
-        XCTAssertEqual(account.fundTrades.count, 0, "the insert is still undone")
+        // Not account.fundTrades: before iOS 27 that keeps the undone insert in memory.
+        XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<FundTrade>()), 0, "the insert is still undone")
         XCTAssertFalse(ctx.hasChanges)
     }
 
