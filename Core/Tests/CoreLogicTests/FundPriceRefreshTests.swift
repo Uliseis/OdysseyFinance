@@ -1233,20 +1233,26 @@ final class FundPriceRefreshTests: XCTestCase {
         XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [90, 91, d("105.5")])
     }
 
-    // Against the newest reading before the day being corrected.
-    func testTheImplausibleValueGuardAppliesToCorrections() async throws {
+    // Against the newest reading before the day being corrected, each day on its own: a refused
+    // correction leaves the value it would replace, which is no problem to report as a failure.
+    func testTheImplausibleValueGuardAppliesToEachCorrectionOnItsOwn() async throws {
         let ctx = try S.makeContext()
         let acc = try makeAccount(ctx)
         try addValue(acc, ctx, on: 8, "1", notes: nil)
         try addValue(acc, ctx, on: 11, "104")
-        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2")])
-        source.series[b] = prices(b, [(8, "2"), (11, "2"), (12, "2")])
+        try addValue(acc, ctx, on: 12, "105")
+        source.series[a] = prices(a, [(8, "7"), (11, "7.1"), (12, "7.2"), (13, "7.3")])
+        source.series[b] = prices(b, [(8, "2"), (11, "2"), (12, "2"), (13, "2")])
 
-        let outcome = await run(ctx)
+        let outcome = await run(ctx, at: thursday)
 
-        XCTAssertEqual(outcome.failures, ["Funds: 104.5 EUR is far from the last reading (1 EUR). Check the quantity; not saved."])
-        XCTAssertEqual(outcome.notices, ["Funds: values recorded for 1 day (12 Mar)."])
-        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [1, 104, d("105.5")])
+        XCTAssertEqual(outcome.failures, [])
+        XCTAssertEqual(outcome.notices, [
+            "Funds: values recorded for 1 day (13 Mar).",
+            "Funds: corrected 1 recent value (12 Mar) with newer prices.",
+            "Funds: left the 11 Mar value as it was; the new one looks implausible next to the 8 Mar reading.",
+        ])
+        XCTAssertEqual(try valuations(acc, ctx).map(\.marketValueEur), [1, 104, d("105.5"), d("106.5")])
     }
 
     func testAutomaticValuesFromOtherSourcesAreNotCorrected() async throws {
