@@ -83,7 +83,8 @@ extension CoreLogic {
         public static func runIfDue(
             in ctx: ModelContext, every interval: TimeInterval = BankSyncThrottle.interval,
             throttle: BankSyncThrottle = BankSyncThrottle(),
-            api makeAPI: () throws -> any EBSyncAPI = { EBClient(tokenProvider: try EBKeychain().loadSigner()) }
+            api makeAPI: () throws -> any EBSyncAPI = { EBClient(tokenProvider: try EBKeychain().loadSigner()) },
+            banksDone: (@MainActor (_ done: Int, _ of: Int) -> Void)? = nil
         ) async -> SyncSummary.Banks {
             let connections = (try? ctx.fetch(FetchDescriptor<Connection>())) ?? []
             guard connections.contains(where: { $0.connector == .enablebanking }) else {
@@ -99,7 +100,7 @@ extension CoreLogic {
             } catch {
                 return .noKey(keyProblem(error))
             }
-            guard let results = await runNow(throttle: throttle, { await EBSync.syncAll(api: api, in: ctx) })
+            guard let results = await runNow(throttle: throttle, { await EBSync.syncAll(api: api, in: ctx, banksDone: banksDone) })
             else { return .busy }
             return .synced(EBSync.report(results, in: ctx))
         }

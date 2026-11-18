@@ -14,12 +14,95 @@ import CoreSync
 // action, throttled (CoreLogic.BankSyncThrottle) so opening the app twice in a row doesn't
 // hammer the API.
 enum ForegroundBankSync {
-    // The steps done so far, for the Shortcuts action's answer at its deadline.
+    // The steps done so far, for the Shortcuts action's answer when it can't wait for the rest,
+    // and on iOS 27 what the action shows on the Lock Screen while it runs.
     @MainActor
-    final class Progress {
+    final class Steps {
         var investments: CoreLogic.InvestmentRefresh.Outcome?
         var banks: CoreLogic.SyncSummary.Banks?
         var snapshotAtDeadline: Task<Void, Never>?
+        let shown: ShownProgress?
+        private(set) var started = false
+        private(set) var cancelled = false
+        private var run: Task<String, Never>?
+
+        init(showing progress: Foundation.Progress? = nil) {
+            shown = progress.map(ShownProgress.init)
+        }
+
+        var soFar: String { CoreLogic.SyncSummary.soFar(banks: banks, investments: investments) }
+
+        // iOS can end the action before the run starts, which then starts cancelled.
+        func cancel() {
+            cancelled = true
+            run?.cancel()
+        }
+
+        // Cancels the run and gives it a second to record the banks it cut off, like the grace on
+        // the 25-second path. Answers with the run's own summary if it ends in time.
+        func stop() async -> String {
+            cancel()
+            guard let run else { return soFar }
+            return await CoreLogic.Deadline.value(of: run, by: .now + .seconds(1)) ?? soFar
+        }
+
+        fileprivate func start(_ run: Task<String, Never>) {
+            started = true
+            self.run = run
+            if cancelled { run.cancel() }
+        }
+    }
+
+    // iOS 27 lets the action run to the end while it reports its progress, which iOS shows on the
+    // Lock Screen, and can end one whose progress stalls. One bank can take a minute or more, so
+    // besides each step the bar inches on every few seconds while a step is out, never past where
+    // that step ends.
+    @MainActor
+    final class ShownProgress {
+        private let progress: Foundation.Progress
+        private var ceiling: Int64 = 0
+        private var ticker: Task<Void, Never>?
+
+        init(_ progress: Foundation.Progress) { self.progress = progress }
+
+        func investments() { step("Refreshing investments", from: 0, to: 30) }
+
+        // The banks run side by side, so the slowest sets how long this lasts: the bar can inch
+        // through the whole stretch, and each bank that finishes moves it at least to its share.
+        func banks(done: Int, of total: Int) {
+            guard total > 0 else { return }
+            step("Syncing banks", detail: "\(done) of \(total)", from: Int64(30 + 60 * done / total), to: 90)
+        }
+
+        func saving() { step("Saving", from: 90, to: 100) }
+
+        func finish() {
+            guard let ticker else { return }
+            ticker.cancel()
+            progress.completedUnitCount = progress.totalUnitCount
+        }
+
+        // Started by the first step, so an action refused the extra time never shows a bar.
+        private func step(_ what: String, detail: String? = nil, from: Int64, to: Int64) {
+            if ticker == nil {
+                progress.totalUnitCount = 100
+                ticker = Task { [weak self] in
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(5))
+                        guard let self else { return }
+                        self.inch()
+                    }
+                }
+            }
+            progress.localizedDescription = what
+            progress.localizedAdditionalDescription = detail
+            progress.completedUnitCount = max(from, progress.completedUnitCount)
+            ceiling = to - 1
+        }
+
+        private func inch() {
+            if progress.completedUnitCount < ceiling { progress.completedUnitCount += 1 }
+        }
     }
 
     @MainActor
@@ -44,14 +127,14 @@ enum ForegroundBankSync {
     static func syncAndRefresh(
         _ ctx: ModelContext, engine: CloudKitSyncEngine?, answeringBy deadline: ContinuousClock.Instant
     ) async -> String {
-        let progress = Progress()
+        let steps = Steps()
         let run = Task { @MainActor in
             await withBackgroundTask("SyncAndRefresh") {
-                let summary = await refresh(ctx, engine: engine, progress: progress)
+                let summary = await refresh(ctx, engine: engine, steps: steps)
                 if !Task.isCancelled {
                     // After the write at the deadline, so the older snapshot can't land last; forced
                     // past the 30-second pause that write started. An unchanged one is still skipped.
-                    await progress.snapshotAtDeadline?.value
+                    await steps.snapshotAtDeadline?.value
                     await ClaudeBridge.exportSnapshot(ctx, force: true)
                 }
                 return summary
@@ -59,32 +142,47 @@ enum ForegroundBankSync {
         }
         if let summary = await CoreLogic.Deadline.value(of: run, by: deadline) { return summary }
         // What's done so far reaches the Mac now, in case iOS stops the rest.
-        progress.snapshotAtDeadline = Task { await ClaudeBridge.exportSnapshot(ctx) }
-        return CoreLogic.SyncSummary.soFar(banks: progress.banks, investments: progress.investments)
+        steps.snapshotAtDeadline = Task { await ClaudeBridge.exportSnapshot(ctx) }
+        return steps.soFar
+    }
+
+    // iOS 27: the whole run inside the action, so its answer covers the banks too. No UIKit
+    // background task: its 30 seconds would cut the run short. iOS ending the action cancels the
+    // run through `steps`, which then records the banks it cut off, as at the deadline.
+    @MainActor
+    static func syncAndRefresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?, steps: Steps) async -> String {
+        let run = Task { @MainActor in await refresh(ctx, engine: engine, steps: steps) }
+        steps.start(run)
+        let summary = await withTaskCancellationHandler { await run.value } onCancel: { run.cancel() }
+        steps.shown?.finish()
+        await ClaudeBridge.exportSnapshot(ctx, force: true)
+        return summary
     }
 
     // The foreground hook and the Shortcuts action share this: investments, then banks unless
     // they were tried in the last 15 minutes, the automations that follow every sync, and a push.
     // Returns what it did in a line, for the action's answer.
     @MainActor
-    private static func refresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?, progress: Progress? = nil) async -> String {
+    private static func refresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?, steps: Steps? = nil) async -> String {
         // First, and pushed straight away, so the values leave the phone even when a bank runs
         // long. Independent of Enable Banking: brokers and crypto have their own sources, and an
         // unconfigured bank connection shouldn't stop them refreshing. The refresh is a task of its
         // own that outlives its callers, so running out of background time stops it explicitly.
+        steps?.shown?.investments()
         let investments = await withTaskCancellationHandler {
             await CoreLogic.InvestmentRefresh.run(in: ctx)
         } onCancel: {
             Task { @MainActor in CoreLogic.InvestmentRefresh.cancel() }
         }
-        progress?.investments = investments
+        steps?.investments = investments
         // SaveObserver has queued the values; the nudge doesn't hold the banks up on CloudKit.
         Task { await engine?.sendPendingChanges() }
         // Out of background time: the rest waits for the next run.
         guard !Task.isCancelled else { return CoreLogic.SyncSummary.soFar(banks: nil, investments: investments) }
-        let banks = await CoreLogic.BankSync.runIfDue(in: ctx)
-        progress?.banks = banks
+        let banks = await CoreLogic.BankSync.runIfDue(in: ctx, banksDone: { steps?.shown?.banks(done: $0, of: $1) })
+        steps?.banks = banks
         if !Task.isCancelled {
+            steps?.shown?.saving()
             await AutomationRunner.run(ctx)
             // Rows inserted on the main context push via SaveObserver, but nudge the engine so
             // they leave the device on this run rather than the next save.

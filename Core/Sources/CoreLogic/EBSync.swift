@@ -230,10 +230,11 @@ extension CoreLogic {
         // waits overlap, every step on the context stays on the main actor. A bank's own
         // connections still run in turn, since one can take over another's account and revoke it,
         // and a revoked connection must not then sync. Results come in the order the connections
-        // were made.
+        // were made. `banksDone` hears the number of banks first, then each one as it finishes.
         @MainActor
         public static func syncAll(
-            api: any EBSyncAPI, in ctx: ModelContext, now: Date = .now
+            api: any EBSyncAPI, in ctx: ModelContext, now: Date = .now,
+            banksDone: (@MainActor (_ done: Int, _ of: Int) -> Void)? = nil
         ) async -> [SyncResult] {
             // The children run on the main actor as well, so the context and its models never leave it.
             nonisolated(unsafe) let ctx = ctx
@@ -242,6 +243,7 @@ extension CoreLogic {
             let banks = Dictionary(grouping: all.indices) {
                 all[$0].institutionId ?? all[$0].institutionName ?? all[$0].id.uuidString
             }.values
+            banksDone?(0, banks.count)
             return await withTaskGroup(of: [(Int, SyncResult)].self) { group in
                 for indices in banks {
                     group.addTask { @MainActor in
@@ -261,7 +263,12 @@ extension CoreLogic {
                     }
                 }
                 var results: [(Int, SyncResult)] = []
-                for await bank in group { results += bank }
+                var done = 0
+                for await bank in group {
+                    results += bank
+                    done += 1
+                    banksDone?(done, banks.count)
+                }
                 return results.sorted { $0.0 < $1.0 }.map(\.1)
             }
         }

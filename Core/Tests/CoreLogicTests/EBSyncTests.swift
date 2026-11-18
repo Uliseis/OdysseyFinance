@@ -464,6 +464,18 @@ final class EBSyncTests: XCTestCase {
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<Transaction>()), 3)
     }
 
+    // The Shortcuts action shows how far it has got while it runs long, so each bank is told as
+    // it finishes, in the order they finish, after the count up front.
+    func testSyncAllTellsEachBankAsItFinishes() async throws {
+        let ctx = try S.makeContext()
+        let (_, api) = try pacedBanks(ctx, delays: [.milliseconds(300), .zero, .milliseconds(150)], failing: ["sess-2"])
+        var told: [[Int]] = []
+
+        _ = await Sync.syncAll(api: api, in: ctx, banksDone: { told.append([$0, $1]) })
+
+        XCTAssertEqual(told, [[0, 3], [1, 3], [2, 3], [3, 3]], "a failing bank is finished too")
+    }
+
     func testABankFailingAlongsideTheOthersIsRecordedAsBefore() async throws {
         let ctx = try S.makeContext()
         let (connections, api) = try pacedBanks(ctx, delays: [.milliseconds(100), .zero, .milliseconds(50)], failing: ["sess-1"])
