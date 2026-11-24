@@ -3,7 +3,7 @@ import CoreModel
 
 // A category's icon, derived from its name. Categories carry a colour but no symbol, and
 // adding one would mean a model + CloudKit schema change for what is, for a single user
-// with fourteen categories, a lookup table.
+// with a handful of categories, a lookup table.
 // ponytail: name-matched. A renamed category falls back to the neutral glyph, which is
 // correct-but-plain; give Category a `symbol` field if the set ever churns.
 enum CategoryGlyph {
@@ -21,6 +21,8 @@ enum CategoryGlyph {
     private static let table: [(String, String)] = [
         ("other income", "arrow.down.circle"),
         ("entertainment", "theatermasks"),
+        ("shared cost", "person.2"),
+        ("education", "graduationcap"),
         ("subscription", "arrow.clockwise"),
         ("restaurant", "fork.knife"),
         ("grocer", "basket"),
@@ -30,6 +32,8 @@ enum CategoryGlyph {
         ("health", "cross.case"),
         ("shopping", "bag"),
         ("travel", "airplane"),
+        ("taxes", "building.columns"),
+        ("debt", "creditcard"),
         ("salary", "banknote"),
         ("income", "arrow.down.circle"),
         ("fee", "percent"),
