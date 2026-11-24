@@ -14,6 +14,8 @@ struct InvestmentsModel {
     var rows: [Row]
     var series: [CoreLogic.Investments.PortfolioSeriesPoint]
     var periodGain: PeriodGain?
+    // Money-weighted, for the accounts counted in totalPnl; only worked out for "All".
+    var annualReturn: CoreLogic.Investments.AnnualReturn?
     // Where the recorded history begins; lifetime profit includes whatever was made before it.
     var firstReadingAt: Date?
 
@@ -37,6 +39,7 @@ struct InvestmentsModel {
         let hasCostBasis: Bool
         let periodGainEur: Decimal?
         let periodGainPct: Decimal?
+        let annualReturnRate: Decimal?
         // For an account valued from fund prices: the span of its held funds' newest prices.
         let priceDays: ClosedRange<Date>?
     }
@@ -44,7 +47,7 @@ struct InvestmentsModel {
     static let empty = InvestmentsModel(
         totalValue: 0, totalCost: nil, totalPnl: nil, totalPnlPct: nil,
         totalCash: 0, totalPositions: 0, lastUpdated: nil, rows: [], series: [], periodGain: nil,
-        firstReadingAt: nil
+        annualReturn: nil, firstReadingAt: nil
     )
 
     @MainActor
@@ -87,6 +90,14 @@ struct InvestmentsModel {
         // (an asset whose entry price was never recorded) would otherwise have its entire
         // value reported as profit.
         var valueOfCostedAccounts: Decimal = 0
+        var costedIds: Set<UUID> = []
+        let now = Date.now
+        func annualReturn(_ ids: Set<UUID>) -> CoreLogic.Investments.AnnualReturn? {
+            guard period == .all else { return nil }
+            return CoreLogic.Investments.annualReturn(
+                bases: bases.filter { ids.contains($0.accountId) },
+                valuations: valuations, legs: legs, metrics: metrics, now: now)
+        }
         for r in invRows {
             let m = metrics[r.account.id]
             if let v = m?.valueEur { totalValue += v }
@@ -94,6 +105,7 @@ struct InvestmentsModel {
                 totalCost += c
                 countedForCost += 1
                 valueOfCostedAccounts += m?.valueEur ?? 0
+                costedIds.insert(r.account.id)
             }
             totalCash += m?.latestCashEur ?? 0
             totalPositions += m?.latestPositionsEur ?? 0
@@ -110,6 +122,7 @@ struct InvestmentsModel {
                 hasCostBasis: m?.costBasisEur != nil,
                 periodGainEur: returns?[r.account.id]?.gainEur,
                 periodGainPct: returns?[r.account.id]?.gainPct,
+                annualReturnRate: annualReturn([r.account.id])?.ratePerYear,
                 priceDays: fundTrades.flatMap { fundPrices?.priceDays(heldBy: $0) }
             ))
         }
@@ -143,8 +156,16 @@ struct InvestmentsModel {
             rows: rows,
             series: series,
             periodGain: periodGain,
+            annualReturn: annualReturn(costedIds),
             firstReadingAt: valuations.map(\.asOf).min()
         )
+    }
+}
+
+extension InvestmentsModel {
+    static func yearlyRate(_ rate: Decimal) -> String {
+        let pct = rate.formatted(.percent.precision(.fractionLength(1)))
+        return rate > 0 ? "+\(pct)" : pct
     }
 }
 

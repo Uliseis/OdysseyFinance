@@ -177,6 +177,12 @@ private struct SummaryCard: View {
                     .fontDesign(.rounded)
                     .foregroundStyle(Theme.amountColor(pnl))
                     .contentTransition(.numericText())
+                    if period == .all, let annual = vm.annualReturn {
+                        Text("\(InvestmentsModel.yearlyRate(annual.ratePerYear)) a year since \(Self.unbroken(annual.since)), money-weighted")
+                            .font(.footnote.weight(.semibold))
+                            .fontDesign(.rounded)
+                            .foregroundStyle(Theme.amountColor(annual.ratePerYear))
+                    }
                     Text(gainCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -252,6 +258,12 @@ private struct AccountMetricRow: View {
                 } else {
                     Text("No cost basis")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if period == .all, let rate = row.annualReturnRate {
+                    Text("\(InvestmentsModel.yearlyRate(rate)) a year")
+                        .font(.caption2.monospacedDigit())
+                        .fontDesign(.rounded)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

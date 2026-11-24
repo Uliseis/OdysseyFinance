@@ -493,6 +493,68 @@ extension CoreLogic {
             return denominator > Decimal(string: "0.000001")! ? gain / denominator : nil
         }
 
+        public struct AnnualReturn: Equatable, Sendable {
+            // The earliest starting reading it's measured from.
+            public let since: Date
+            public let ratePerYear: Decimal
+        }
+
+        // Annualising a few months turns an ordinary swing into an extreme yearly figure.
+        public static let annualReturnMinDays: TimeInterval = 365
+
+        // Money-weighted yearly return over the recorded history of these accounts together: each
+        // account's starting reading counts as money paid in on its day, every transfer after it as
+        // money in or out (payouts included), and today's values as money taken out. A deposit
+        // only earns from the day it lands, which a profit-over-cost percentage can't show.
+        // The starting reading is the last one on or before the cost-basis opening, since
+        // transfers before the opening may be missing from the ledger; otherwise the first.
+        public static func annualReturn(
+            bases: [AccountBasis],
+            valuations: [PortfolioValuation],
+            legs: [ContributionLeg],
+            metrics: [UUID: AccountMetrics],
+            now: Date
+        ) -> AnnualReturn? {
+            var flows: [(at: Date, eur: Decimal)] = []
+            var endValue: Decimal = 0
+            for basis in bases {
+                let id = basis.accountId
+                let list = valuations.filter { $0.account?.id == id }.sorted { $0.asOf < $1.asOf }
+                let opening = basis.costBasisOpeningAt.flatMap { at in list.last { $0.asOf <= at } }
+                guard let first = opening ?? list.first, let value = metrics[id]?.valueEur else { continue }
+                flows.append((first.asOf, first.marketValueEur))
+                // Strict >: the starting reading already includes a transfer booked at its instant.
+                for leg in legs where leg.accountId == id && leg.bookedAt > first.asOf && leg.bookedAt <= now {
+                    flows.append((leg.bookedAt, leg.netEur))
+                }
+                endValue += value
+            }
+            guard let since = flows.map(\.at).min(),
+                  now.timeIntervalSince(since) >= annualReturnMinDays * 86_400,
+                  let rate = moneyWeightedRate(flows: flows, endValue: endValue, end: now) else { return nil }
+            return AnnualReturn(since: since, ratePerYear: rate)
+        }
+
+        // The yearly rate at which every flow, grown to `end`, adds up to `endValue` (XIRR, 365-day
+        // years). Decimal has no fractional powers, so only the growth factor is a Double; the money
+        // stays Decimal. nil when no rate between −99% and +1000% a year fits.
+        static func moneyWeightedRate(flows: [(at: Date, eur: Decimal)], endValue: Decimal, end: Date) -> Decimal? {
+            func surplus(_ rate: Double) -> Decimal {
+                flows.reduce(-endValue) { sum, flow in
+                    let years = end.timeIntervalSince(flow.at) / (365 * 86_400)
+                    return sum + flow.eur * Decimal(pow(1 + rate, years))
+                }
+            }
+            var low = -0.99, high = 10.0
+            let lowIsNegative = surplus(low) < 0
+            guard lowIsNegative != (surplus(high) < 0) else { return nil }
+            for _ in 0..<60 {
+                let mid = (low + high) / 2
+                if (surplus(mid) < 0) == lowIsNegative { low = mid } else { high = mid }
+            }
+            return Decimal((low + high) / 2)
+        }
+
         // MARK: - Helpers
 
 

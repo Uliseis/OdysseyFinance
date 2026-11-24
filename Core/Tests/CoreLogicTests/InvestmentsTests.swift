@@ -965,5 +965,120 @@ final class InvestmentsTests: XCTestCase {
         let r = try periodReturn(acc, legs + [payout], vals, .ytd)
         XCTAssertEqual(r.gainEur, 250)
     }
+
+    // MARK: - Annual return
+
+    private func investmentAccount(_ ctx: ModelContext, _ name: String) -> Account {
+        let acc = Account(
+            group: makeGroup(ctx, name: "Invest", kind: .investment), space: S.makeSpace(ctx),
+            externalId: name, type: .broker, institution: name, name: name, currency: "EUR")
+        ctx.insert(acc)
+        return acc
+    }
+
+    private func annual(
+        _ accounts: [Account], _ vals: [PortfolioValuation], _ legs: [I.ContributionLeg] = [], now: Date
+    ) -> I.AnnualReturn? {
+        annual(accounts.map { I.AccountBasis(accountId: $0.id) }, vals, legs, now: now)
+    }
+
+    private func annual(
+        _ bases: [I.AccountBasis], _ vals: [PortfolioValuation], _ legs: [I.ContributionLeg] = [], now: Date
+    ) -> I.AnnualReturn? {
+        let metrics = I.computeAccountMetrics(bases: bases, valuations: vals, legs: legs, now: now)
+        return I.annualReturn(bases: bases, valuations: vals, legs: legs, metrics: metrics, now: now)
+    }
+
+    private func rate(_ r: I.AnnualReturn?) throws -> Double {
+        NSDecimalNumber(decimal: try XCTUnwrap(r).ratePerYear).doubleValue
+    }
+
+    func testAnnualReturnOfOneYearAtTenPercent() throws {
+        let ctx = try S.makeContext()
+        let acc = investmentAccount(ctx, "a")
+        let vals = [
+            makeValuation(ctx, account: acc, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: acc, asOf: day(2026, 1, 1), marketValueEur: 1100),
+        ]
+        let r = annual([acc], vals, now: day(2026, 1, 1))
+        XCTAssertEqual(try rate(r), 0.10, accuracy: 1e-6)
+        XCTAssertEqual(r?.since, day(2025, 1, 1))
+    }
+
+    func testADepositOnlyEarnsFromTheDayItLands() throws {
+        let ctx = try S.makeContext()
+        let acc = investmentAccount(ctx, "a")
+        // 1000 grows 10% to 1100, 1000 more arrives, 2100 grows 10% to 2310. Profit over cost
+        // reads 310 / 2000 = 15.5%, but no euro ever earned more than 10% a year.
+        let vals = [
+            makeValuation(ctx, account: acc, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: acc, asOf: day(2027, 1, 1), marketValueEur: 2310),
+        ]
+        let deposit = I.ContributionLeg(accountId: acc.id, bookedAt: day(2026, 1, 1), netEur: 1000)
+        XCTAssertEqual(try rate(annual([acc], vals, [deposit], now: day(2027, 1, 1))), 0.10, accuracy: 1e-6)
+    }
+
+    func testPayoutsCountAsMoneyHandedBack() throws {
+        let ctx = try S.makeContext()
+        let acc = investmentAccount(ctx, "a")
+        let vals = [
+            makeValuation(ctx, account: acc, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: acc, asOf: day(2026, 1, 1), marketValueEur: 1000),
+        ]
+        let payout = I.ContributionLeg(
+            accountId: acc.id, bookedAt: day(2026, 1, 1), netEur: -100, isDistribution: true)
+        XCTAssertEqual(try rate(annual([acc], vals, [payout], now: day(2026, 1, 1))), 0.10, accuracy: 1e-6)
+    }
+
+    func testALossIsANegativeRate() throws {
+        let ctx = try S.makeContext()
+        let acc = investmentAccount(ctx, "a")
+        let vals = [
+            makeValuation(ctx, account: acc, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: acc, asOf: day(2026, 1, 1), marketValueEur: 900),
+        ]
+        XCTAssertEqual(try rate(annual([acc], vals, now: day(2026, 1, 1))), -0.10, accuracy: 1e-6)
+    }
+
+    func testUnderAYearOfHistoryHasNoAnnualReturn() throws {
+        let ctx = try S.makeContext()
+        let acc = investmentAccount(ctx, "a")
+        let vals = [
+            makeValuation(ctx, account: acc, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: acc, asOf: day(2025, 7, 1), marketValueEur: 1200),
+        ]
+        XCTAssertNil(annual([acc], vals, now: day(2025, 7, 1)))
+    }
+
+    func testReadingsBeforeTheCostBasisOpeningAreSkipped() throws {
+        let ctx = try S.makeContext()
+        let acc = investmentAccount(ctx, "a")
+        // The 2024 reading predates the opening, so transfers between it and the opening may be
+        // missing; measured from it, 500 → 1100 would read as a 48% year.
+        let vals = [
+            makeValuation(ctx, account: acc, asOf: day(2024, 1, 1), marketValueEur: 500),
+            makeValuation(ctx, account: acc, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: acc, asOf: day(2026, 1, 1), marketValueEur: 1100),
+        ]
+        let basis = I.AccountBasis(accountId: acc.id, costBasisOpeningEur: 1000, costBasisOpeningAt: day(2025, 1, 1))
+        let r = annual([basis], vals, now: day(2026, 1, 1))
+        XCTAssertEqual(try rate(r), 0.10, accuracy: 1e-6)
+        XCTAssertEqual(r?.since, day(2025, 1, 1))
+    }
+
+    func testPortfolioRateCombinesAccountsThatStartedAtDifferentTimes() throws {
+        let ctx = try S.makeContext()
+        let a = investmentAccount(ctx, "a")
+        let b = investmentAccount(ctx, "b")
+        let vals = [
+            makeValuation(ctx, account: a, asOf: day(2025, 1, 1), marketValueEur: 1000),
+            makeValuation(ctx, account: a, asOf: day(2027, 1, 1), marketValueEur: 1210),
+            makeValuation(ctx, account: b, asOf: day(2026, 1, 1), marketValueEur: 500),
+            makeValuation(ctx, account: b, asOf: day(2027, 1, 1), marketValueEur: 550),
+        ]
+        let r = annual([a, b], vals, now: day(2027, 1, 1))
+        XCTAssertEqual(try rate(r), 0.10, accuracy: 1e-6)
+        XCTAssertEqual(r?.since, day(2025, 1, 1))
+    }
 }
 
