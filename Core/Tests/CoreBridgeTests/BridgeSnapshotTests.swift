@@ -130,6 +130,14 @@ final class BridgeSnapshotTests: XCTestCase {
         let state = try BridgeCoding.decoder().decode(BridgeAppState.self, from: Data(old.utf8))
         XCTAssertEqual(state.cycleStartDay, 20)
         XCTAssertNil(state.claude)
+        XCTAssertNil(state.cycleOneOffStarts)
+    }
+
+    func test_appStateCycle_includesOneOffStarts() throws {
+        let start = Date(timeIntervalSince1970: 1_773_273_600) // 12 Mar 2026, 00:00 UTC
+        let state = BridgeAppState(cycleStartDay: 20, cycleOneOffStarts: [start])
+        let decoded = try BridgeCoding.decoder().decode(BridgeAppState.self, from: BridgeCoding.encoder().encode(state))
+        XCTAssertEqual(CoreLogic.Dashboard.cycleStart(start.addingTimeInterval(86_400), cycle: decoded.cycle), start)
     }
 
     // MARK: - rewrite only on change

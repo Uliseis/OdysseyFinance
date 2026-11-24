@@ -36,13 +36,32 @@ extension CoreLogic {
             public let startDay: Int
             // Salaries due on a weekend arrive the Friday before, so the month starts then too.
             public let startsEarlyOnWeekends: Bool
+            // A salary paid off schedule: the start moves for that one month, which then runs to
+            // its usual end, and the month before ends the day before. Keyed by month index.
+            let oneOffStarts: [Int: Date]
 
-            public init(startDay: Int = 1, startsEarlyOnWeekends: Bool = true) {
+            // Each one-off start moves the month whose usual start is nearest; when two move the
+            // same month, the earlier wins. Days are UTC, like the boundaries.
+            public init(startDay: Int = 1, startsEarlyOnWeekends: Bool = true, oneOffStarts: [Date] = []) {
                 self.startDay = min(max(startDay, 1), maxCycleStartDay)
                 self.startsEarlyOnWeekends = startsEarlyOnWeekends
+                var moved: [Int: Date] = [:]
+                for start in oneOffStarts.map({ utc.startOfDay(for: $0) }).sorted() {
+                    let k = Dashboard.nearestMonth(to: start, startDay: self.startDay, startsEarlyOnWeekends: startsEarlyOnWeekends)
+                    if moved[k] == nil { moved[k] = start }
+                }
+                self.oneOffStarts = moved
             }
 
             public static let calendarMonth = Cycle(startDay: 1)
+
+            public var hasOneOffStarts: Bool { !oneOffStarts.isEmpty }
+
+            // Where the month that `start` moves would have started.
+            public func usualStart(movedTo start: Date) -> Date {
+                let k = Dashboard.nearestMonth(to: utc.startOfDay(for: start), startDay: startDay, startsEarlyOnWeekends: startsEarlyOnWeekends)
+                return Dashboard.usualBoundary(monthIndex: k, startDay: startDay, startsEarlyOnWeekends: startsEarlyOnWeekends)
+            }
         }
 
         private static var utc: Calendar {
@@ -54,11 +73,26 @@ extension CoreLogic {
         // Where the budgeting month that is named after `monthIndex` (months since year 0)
         // begins. Day 1 is always the calendar month.
         static func cycleBoundary(monthIndex: Int, cycle: Cycle) -> Date {
+            cycle.oneOffStarts[monthIndex]
+                ?? usualBoundary(monthIndex: monthIndex, startDay: cycle.startDay, startsEarlyOnWeekends: cycle.startsEarlyOnWeekends)
+        }
+
+        // Nearest of the usual starts around the date's own month; a tie goes to the earlier month.
+        static func nearestMonth(to date: Date, startDay: Int, startsEarlyOnWeekends: Bool) -> Int {
+            let k = monthIndex(date)
+            return (k - 1...k + 1).min { a, b in
+                let da = abs(usualBoundary(monthIndex: a, startDay: startDay, startsEarlyOnWeekends: startsEarlyOnWeekends).timeIntervalSince(date))
+                let db = abs(usualBoundary(monthIndex: b, startDay: startDay, startsEarlyOnWeekends: startsEarlyOnWeekends).timeIntervalSince(date))
+                return da < db || (da == db && a < b)
+            }!
+        }
+
+        static func usualBoundary(monthIndex: Int, startDay: Int, startsEarlyOnWeekends: Bool) -> Date {
             let cal = utc
             let year = Int((Double(monthIndex) / 12).rounded(.down))
             let month = monthIndex - year * 12 + 1
-            let d = cal.date(from: DateComponents(year: year, month: month, day: cycle.startDay))!
-            guard cycle.startDay != 1, cycle.startsEarlyOnWeekends else { return d }
+            let d = cal.date(from: DateComponents(year: year, month: month, day: startDay))!
+            guard startDay != 1, startsEarlyOnWeekends else { return d }
             switch cal.component(.weekday, from: d) {
             case 7: return cal.date(byAdding: .day, value: -1, to: d)!
             case 1: return cal.date(byAdding: .day, value: -2, to: d)!
