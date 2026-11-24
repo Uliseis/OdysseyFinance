@@ -1,5 +1,6 @@
 import AppIntents
 import SwiftData
+import CoreLogic
 import CoreSync
 
 // Syncs the banks and refreshes investment values without opening the app, so a daily personal
@@ -23,9 +24,17 @@ struct SyncAndRefreshIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let deadline = ContinuousClock.now + Self.answerWithin
         if CloudKitGate.isAvailable { try? engine.start() }
-        if #available(iOS 27, *), let summary = await runToTheEnd() { return .result(dialog: "\(summary)") }
-        let summary = await ForegroundBankSync.syncAndRefresh(
-            container.mainContext, engine: engine, answeringBy: deadline)
+        // A bank this run cuts short records why, starting with the extra time iOS refused.
+        let cutOff = CoreLogic.CutOff()
+        if #available(iOS 27, *) {
+            switch await runToTheEnd() {
+            case .success(let summary): return .result(dialog: "\(summary)")
+            case .failure(let refusal): cutOff.note("iOS refused the Shortcuts action the time to finish (\(refusal))")
+            }
+        }
+        let summary = await CoreLogic.CutOff.$reason.withValue(cutOff) {
+            await ForegroundBankSync.syncAndRefresh(container.mainContext, engine: engine, answeringBy: deadline)
+        }
         return .result(dialog: "\(summary)")
     }
 }
@@ -33,16 +42,17 @@ struct SyncAndRefreshIntent: AppIntent {
 // CancellableIntent is what lets performBackgroundTask take onCancel.
 @available(iOS 27, *)
 extension SyncAndRefreshIntent: LongRunningIntent, CancellableIntent {
-    // nil when iOS doesn't give the extra time, which it refuses to an action run from inside the
-    // app: the 25-second answer takes over. Ended early, it answers with what got done.
+    // Fails with iOS's refusal when it doesn't give the extra time, which it refuses to an action
+    // run from inside the app: the 25-second answer takes over. Ended early, it answers with what
+    // got done.
     @MainActor
-    fileprivate func runToTheEnd() async -> String? {
+    fileprivate func runToTheEnd() async -> Result<String, any Error> {
         let steps = ForegroundBankSync.Steps(showing: progress)
         do {
-            return try await inBackgroundTask(steps)
+            return .success(try await inBackgroundTask(steps))
         } catch {
-            guard steps.started || steps.cancelled || Task.isCancelled else { return nil }
-            return await steps.stop()
+            guard steps.started || steps.cancelled || Task.isCancelled else { return .failure(error) }
+            return .success(await steps.stop())
         }
     }
 
@@ -53,8 +63,17 @@ extension SyncAndRefreshIntent: LongRunningIntent, CancellableIntent {
         let container = container, engine = engine
         return try await performBackgroundTask { @MainActor in
             await ForegroundBankSync.syncAndRefresh(container.mainContext, engine: engine, steps: steps)
-        } onCancel: { _ in
+        } onCancel: { reason in
+            steps.cutOff.note(Self.why(reason))
             Task { @MainActor in steps.cancel() }
+        }
+    }
+
+    private nonisolated static func why(_ reason: IntentCancellationReason) -> String {
+        switch reason {
+        case .timeout: "iOS ended the Shortcuts action: it ran out of time"
+        case .userCancelled: "the Shortcuts action was cancelled"
+        default: "iOS ended the Shortcuts action (\(reason.debugDescription))"
         }
     }
 }

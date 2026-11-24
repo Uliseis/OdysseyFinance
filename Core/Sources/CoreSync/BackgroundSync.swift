@@ -66,7 +66,8 @@ public enum BackgroundSync {
     // (the App only registers these when CloudKit is available, so start can't trap).
     private static func handle(task: BGTask, engine: CloudKitSyncEngine) {
         let box = TaskBox(task: task)
-        let work = Task { @MainActor in
+        let cutOff = CoreLogic.CutOff()
+        let work = CoreLogic.CutOff.$reason.withValue(cutOff) { Task { @MainActor in
             try? engine.start()
             await syncEnableBanking(engine.modelContainer)
             // Before the push below, so it carries the valuations too.
@@ -76,8 +77,11 @@ public enum BackgroundSync {
             await engine.sendPendingChanges()
             await schedule()
             box.task.setTaskCompleted(success: !Task.isCancelled)
+        } }
+        task.expirationHandler = {
+            cutOff.note("iOS ended the background refresh task")
+            work.cancel()
         }
-        task.expirationHandler = { work.cancel() }
     }
 
     private static func handleInvestments(task: BGTask, engine: CloudKitSyncEngine) {

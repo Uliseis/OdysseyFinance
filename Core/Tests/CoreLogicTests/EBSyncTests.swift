@@ -535,6 +535,30 @@ final class EBSyncTests: XCTestCase {
         }
     }
 
+    // Whoever cancels the sync says why first; the runs it cut short record that, in order.
+    func testARunCutShortRecordsWhyItWasCancelled() async throws {
+        let ctx = try S.makeContext()
+        let conn = makeConnection(ctx)
+        let api = StubAPI(session: makeSession())
+        api.details[Self.uid] = details()
+        api.sessionErrorIfCancelled = URLError(.cancelled)
+        let cutOff = CoreLogic.CutOff()
+        cutOff.note("iOS refused the action more time")
+        let task = CoreLogic.CutOff.$reason.withValue(cutOff) { Task { await Sync.syncAll(api: api, in: ctx) } }
+        api.whileSessionInFlight = {
+            cutOff.note("iOS ended the app's background time")
+            cutOff.note("iOS ended the app's background time")
+            task.cancel()
+        }
+
+        let results = await task.value
+
+        let expected = "cut off: iOS refused the action more time, then iOS ended the app's background time"
+        XCTAssertEqual(results.map(\.errors), [[expected]])
+        XCTAssertEqual(try ctx.fetch(FetchDescriptor<SyncRun>()).first?.error, expected)
+        XCTAssertEqual(conn.lastError, expected)
+    }
+
     func testARunCutShortBetweenAccountsIsAnErrorNotPartial() async throws {
         let ctx = try S.makeContext()
         let conn = makeConnection(ctx)
