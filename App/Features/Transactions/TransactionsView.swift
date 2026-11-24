@@ -206,7 +206,7 @@ struct TransactionsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Toggle(isOn: $showExcluded) {
-                        Label("Excluded", systemImage: "eye.slash")
+                        Label("Hidden Accounts", systemImage: "eye.slash")
                     }
                     .toggleStyle(.button)
                     .sensoryFeedback(.selection, trigger: showExcluded)
