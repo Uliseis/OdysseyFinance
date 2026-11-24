@@ -80,10 +80,12 @@ struct AccountFormView: View {
                     }
                 }
                 Section {
-                    Toggle("Exclude from net worth", isOn: $edit.excluded)
+                    Toggle("Hide from balance and spending", isOn: $edit.excluded)
                     if edit.existing != nil {
                         Toggle("Archived", isOn: $edit.archived)
                     }
+                } footer: {
+                    Text("A hidden account isn't counted in Total Balance or Cash, and its transactions stay out of spending and the Transactions list. An investment account still counts in net worth, under Invest.")
                 }
                 if edit.existing != nil {
                     Section {
@@ -115,8 +117,8 @@ struct AccountFormView: View {
                 Button("Cancel", role: .cancel) {}
             } message: { impact in
                 Text(impact.summary + (edit.excluded
-                    ? " It's already excluded from net worth, so leaving it unarchived keeps it out of your totals and keeps its transfers."
-                    : " To keep it out of your totals but keep its transfers, turn on Exclude from net worth instead."))
+                    ? " It's already hidden from balance and spending, so leaving it unarchived keeps it out of your totals and keeps its transfers."
+                    : " To keep it out of your totals but keep its transfers, turn on Hide from balance and spending instead."))
             }
             .saveErrorAlert($saveError)
             .onAppear { openingText = Money.plainAmountText(edit.openingBalance) }

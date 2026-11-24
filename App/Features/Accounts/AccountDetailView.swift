@@ -335,7 +335,7 @@ private struct AccountDetailHeader: View {
     private var meta: String {
         var parts = [account.type.label]
         if account.alias != nil { parts.append(account.name) }
-        if account.excluded { parts.append("excluded") }
+        if account.excluded { parts.append("hidden from balance") }
         if account.archived { parts.append("archived") }
         return parts.joined(separator: " · ")
     }
