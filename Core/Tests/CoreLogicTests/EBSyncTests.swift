@@ -559,6 +559,15 @@ final class EBSyncTests: XCTestCase {
         XCTAssertEqual(conn.lastError, expected)
     }
 
+    func testAVagueCutOffReasonCountsOnlyWithoutASpecificOne() {
+        let cutOff = CoreLogic.CutOff()
+        XCTAssertNil(cutOff.why)
+        cutOff.otherwise("iOS ended the Shortcuts action")
+        XCTAssertEqual(cutOff.why, "iOS ended the Shortcuts action")
+        cutOff.note("iOS ended the Shortcuts action for running out of time")
+        XCTAssertEqual(cutOff.why, "iOS ended the Shortcuts action for running out of time")
+    }
+
     func testARunCutShortBetweenAccountsIsAnErrorNotPartial() async throws {
         let ctx = try S.makeContext()
         let conn = makeConnection(ctx)

@@ -42,7 +42,7 @@ enum ForegroundBankSync {
         // Cancels the run and gives it a second to record the banks it cut off, like the grace on
         // the 25-second path. Answers with the run's own summary if it ends in time.
         func stop() async -> String {
-            if !cancelled { cutOff.note("iOS ended the Shortcuts action") }
+            cutOff.otherwise("iOS ended the Shortcuts action")
             cancel()
             guard let run else { return soFar }
             return await CoreLogic.Deadline.value(of: run, by: .now + .seconds(1)) ?? soFar
@@ -159,7 +159,7 @@ enum ForegroundBankSync {
         steps.start(run)
         let cutOff = steps.cutOff
         let summary = await withTaskCancellationHandler { await run.value } onCancel: {
-            cutOff.note("the Shortcuts action's task was cancelled")
+            cutOff.otherwise("iOS ended the Shortcuts action")
             run.cancel()
         }
         steps.shown?.finish()

@@ -1,3 +1,4 @@
+import Foundation
 import AppIntents
 import SwiftData
 import CoreLogic
@@ -29,7 +30,9 @@ struct SyncAndRefreshIntent: AppIntent {
         if #available(iOS 27, *) {
             switch await runToTheEnd() {
             case .success(let summary): return .result(dialog: "\(summary)")
-            case .failure(let refusal): cutOff.note("iOS refused the Shortcuts action the time to finish (\(refusal))")
+            case .failure(let refusal):
+                let detail = (refusal as NSError).localizedDescription.replacingOccurrences(of: ";", with: ",").prefix(120)
+                cutOff.note("iOS refused the Shortcuts action the time to finish (\(detail))")
             }
         }
         let summary = await CoreLogic.CutOff.$reason.withValue(cutOff) {
@@ -71,7 +74,7 @@ extension SyncAndRefreshIntent: LongRunningIntent, CancellableIntent {
 
     private nonisolated static func why(_ reason: IntentCancellationReason) -> String {
         switch reason {
-        case .timeout: "iOS ended the Shortcuts action: it ran out of time"
+        case .timeout: "iOS ended the Shortcuts action for running out of time"
         case .userCancelled: "the Shortcuts action was cancelled"
         default: "iOS ended the Shortcuts action (\(reason.debugDescription))"
         }

@@ -19,19 +19,24 @@ extension CoreLogic {
     // Why a sync was cancelled. Whoever cancels it notes why first, and the runs it cut short
     // record that rather than a bare "cut off". A task-local, so the work started under it and
     // its child tasks see the same one. Notes keep their order: a refused extension, then the
-    // time that ran out.
+    // time that ran out. A vaguer reason, from a canceller that can't tell why, counts only
+    // when nothing more specific was noted by the time a run is recorded.
     public final class CutOff: Sendable {
         @TaskLocal public static var reason: CutOff?
-        private let notes = Mutex<[String]>([])
+        private let state = Mutex<(notes: [String], otherwise: String?)>(([], nil))
 
         public init() {}
 
         public func note(_ why: String) {
-            notes.withLock { if !$0.contains(why) { $0.append(why) } }
+            state.withLock { if !$0.notes.contains(why) { $0.notes.append(why) } }
+        }
+
+        public func otherwise(_ why: String) {
+            state.withLock { if $0.otherwise == nil { $0.otherwise = why } }
         }
 
         var why: String? {
-            notes.withLock { $0.isEmpty ? nil : $0.joined(separator: ", then ") }
+            state.withLock { $0.notes.isEmpty ? $0.otherwise : $0.notes.joined(separator: ", then ") }
         }
     }
 
