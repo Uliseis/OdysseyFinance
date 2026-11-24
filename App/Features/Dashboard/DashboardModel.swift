@@ -75,7 +75,7 @@ struct DashboardModel {
             )
         }
 
-        let formatter = cycle.startDay == 1 ? monthFormatter : cycleFormatter
+        let formatter = cycle.startDay == 1 && !cycle.hasOneOffStarts ? monthFormatter : cycleFormatter
         let cashFlow = summary.flow.map {
             MonthBar(id: $0.monthStart,
                      end: CoreLogic.Dashboard.cycleStart($0.monthStart, cycle: cycle, offset: 1),

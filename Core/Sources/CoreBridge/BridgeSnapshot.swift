@@ -51,6 +51,8 @@ public struct BankDetail: Codable, Sendable, Equatable {
 public struct BridgeAppState: Codable, Sendable, Equatable {
     public var cycleStartDay: Int
     public var cycleStartsEarlyOnWeekends: Bool
+    // Optional so snapshots written before one-off starts still decode.
+    public var cycleOneOffStarts: [Date]?
     public var currentSpaceId: UUID?
     public var automation: Automation
     // Optional so snapshots written before the write path still decode.
@@ -96,18 +98,19 @@ public struct BridgeAppState: Codable, Sendable, Equatable {
     }
 
     public init(
-        cycleStartDay: Int = 1, cycleStartsEarlyOnWeekends: Bool = true,
+        cycleStartDay: Int = 1, cycleStartsEarlyOnWeekends: Bool = true, cycleOneOffStarts: [Date]? = nil,
         currentSpaceId: UUID? = nil, automation: Automation = .init(), claude: Claude? = nil
     ) {
         self.cycleStartDay = cycleStartDay
         self.cycleStartsEarlyOnWeekends = cycleStartsEarlyOnWeekends
+        self.cycleOneOffStarts = cycleOneOffStarts
         self.currentSpaceId = currentSpaceId
         self.automation = automation
         self.claude = claude
     }
 
     public var cycle: CoreLogic.Dashboard.Cycle {
-        .init(startDay: cycleStartDay, startsEarlyOnWeekends: cycleStartsEarlyOnWeekends)
+        .init(startDay: cycleStartDay, startsEarlyOnWeekends: cycleStartsEarlyOnWeekends, oneOffStarts: cycleOneOffStarts ?? [])
     }
 }
 

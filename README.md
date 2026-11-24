@@ -42,7 +42,7 @@ It started as a Next.js + Postgres web app and was rewritten as a native SwiftUI
 | **Categorisation** | Rule engine (contains / equals / starts / ends / regex on description or counterparty, with priorities). Manual choices always win. |
 | **Transfers** | Automatic pairing of both legs, *transfer routes* that mirror bank-feed lines into manual accounts, manual pairing, and invariants that keep the books balanced. |
 | **Shared expenses** | Group an expense with the payments that reimbursed it (Bizum and friends), so only your share counts as spending. |
-| **Dashboard** | Net worth, cash flow, *this month* and category breakdowns, budgets, and a configurable budgeting month (for example *starts on the 20th, Friday before a weekend*). |
+| **Dashboard** | Net worth, cash flow, *this month* and category breakdowns, budgets, and a configurable budgeting month (for example *starts on the 20th, Friday before a weekend*), with one-off starts for a salary paid off schedule. |
 | **Investments** | Cost basis + valuation history per account, live values from Trading 212 and CoinGecko, period returns, and internal moves (e.g. fund account → pension). |
 | **Recurring & automations** | Detects subscriptions (or pin one to a day of the month), can auto-book expected charges and recurring splits, and asks for confirmation with actionable notifications. |
 | **Statement import** | Import a Revolut card statement (CSV). It matches existing quick-adds instead of duplicating them. |

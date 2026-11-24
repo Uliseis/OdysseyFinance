@@ -124,6 +124,7 @@ enum ClaudeBridge {
         return BridgeAppState(
             cycleStartDay: cycle.startDay,
             cycleStartsEarlyOnWeekends: cycle.startsEarlyOnWeekends,
+            cycleOneOffStarts: CycleSettings.oneOffStarts(d.string(forKey: CycleSettings.oneOffStartsKey) ?? ""),
             currentSpaceId: d.string(forKey: SpaceSelection.key).flatMap(UUID.init(uuidString:)),
             automation: .init(
                 recurringEnabled: AutomationSettings.recurringEnabled,

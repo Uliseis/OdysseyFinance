@@ -276,6 +276,42 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(D.cycleStart(day(2026, 7, 30), cycle: cycle), midnight(2026, 7, 2))
     }
 
+    // 20 Mar 2026 is a Friday, 20 Apr a Monday: a salary paid on 12 Mar starts March there.
+    func testOneOffStartMovesThatMonthOnly() {
+        let cycle = D.Cycle(startDay: 20, oneOffStarts: [day(2026, 3, 12)])
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 12), cycle: cycle), midnight(2026, 3, 12))
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 25), cycle: cycle), midnight(2026, 3, 12))
+        XCTAssertEqual(D.cycleStart(day(2026, 4, 19), cycle: cycle), midnight(2026, 3, 12), "runs to the usual end")
+        XCTAssertEqual(D.cycleStart(day(2026, 4, 20), cycle: cycle), midnight(2026, 4, 20))
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 11), cycle: cycle), midnight(2026, 2, 20), "February ends the day before")
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 25), cycle: cycle, offset: -1), midnight(2026, 2, 20))
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 25), cycle: cycle, offset: 1), midnight(2026, 4, 20))
+    }
+
+    // A salary paid late moves its month's start later, so the days before stay in the month before.
+    func testOneOffStartMovesTheMonthWhoseUsualStartIsNearest() {
+        let late = D.Cycle(startDay: 20, oneOffStarts: [day(2026, 3, 24)])
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 22), cycle: late), midnight(2026, 2, 20))
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 24), cycle: late), midnight(2026, 3, 24))
+        XCTAssertEqual(late.usualStart(movedTo: day(2026, 3, 24)), midnight(2026, 3, 20))
+        // Two starts for the same month: the earlier wins.
+        let both = D.Cycle(startDay: 20, oneOffStarts: [day(2026, 3, 24), day(2026, 3, 12)])
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 15), cycle: both), midnight(2026, 3, 12))
+    }
+
+    func testCashFlowCountsASalaryPaidEarlyInTheMonthItStarts() throws {
+        let ctx = try S.makeContext()
+        let a = S.makeAccount(ctx, name: "Checking")
+        _ = S.makeTx(ctx, account: a, amount: 2000, amountEur: 2000, direction: .credit, bookedAt: midnight(2026, 3, 12))
+        _ = S.makeTx(ctx, account: a, amount: -80, amountEur: -80, direction: .debit, bookedAt: day(2026, 3, 11))
+        let flow = try D.monthlyCashFlow(
+            months: 2, accountIds: [a.id], incomeAccountIds: [a.id], now: day(2026, 3, 25),
+            cycle: D.Cycle(startDay: 20, oneOffStarts: [day(2026, 3, 12)]), in: ctx)
+        XCTAssertEqual(flow.map(\.monthStart), [midnight(2026, 2, 20), midnight(2026, 3, 12)])
+        XCTAssertEqual(flow.map(\.income), [0, 2000])
+        XCTAssertEqual(flow.map(\.expense), [80, 0])
+    }
+
     func testManuallyAttributedGroupLandsInTheNamedCycle() throws {
         let ctx = try S.makeContext()
         let a = S.makeAccount(ctx, name: "Checking")

@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage(SecuritySettings.requireUnlockKey) private var requireUnlock = true
     @AppStorage(CycleSettings.startDayKey) private var cycleStartDay = 1
     @AppStorage(CycleSettings.startsEarlyOnWeekendsKey) private var startsEarlyOnWeekends = true
+    @AppStorage(CycleSettings.oneOffStartsKey) private var oneOffStartsStored = ""
+    @State private var movingAStart = false
     #if DEBUG
     @Query(sort: [SortDescriptor(\SharedExpenseGroup.createdAt, order: .reverse)])
     private var debugGroups: [SharedExpenseGroup]
@@ -53,6 +55,16 @@ struct SettingsView: View {
                     if cycleStartDay != 1 {
                         Toggle("Start Friday Before a Weekend", isOn: $startsEarlyOnWeekends)
                     }
+                    ForEach(oneOffStarts, id: \.self) { start in
+                        LabeledContent("Starts \(Self.day.string(from: start))",
+                                       value: "not \(Self.shortDay.string(from: cycle.usualStart(movedTo: start)))")
+                    }
+                    .onDelete { offsets in
+                        var starts = oneOffStarts
+                        starts.remove(atOffsets: offsets)
+                        oneOffStartsStored = CycleSettings.storing(starts)
+                    }
+                    Button("Move One Month's Start…") { movingAStart = true }
                 } footer: {
                     Text(cycleFooter)
                 }
@@ -99,6 +111,11 @@ struct SettingsView: View {
             .navigationDestination(for: Connection.self) { ConnectionDetailView(connection: $0) }
             .task(id: PendingNavigation.shared.connectionId) { openPendingConnection() }
             .navigationDestination(for: SharedExpenseGroup.self) { SharedExpenseGroupDetailView(group: $0) }
+            .sheet(isPresented: $movingAStart) {
+                MoveMonthStartSheet(cycle: cycle) { start in
+                    oneOffStartsStored = CycleSettings.storing(oneOffStarts + [start])
+                }
+            }
             #if DEBUG
             .task { applyHook() }
             #endif
@@ -135,13 +152,31 @@ struct SettingsView: View {
         }
     }
 
+    private var oneOffStarts: [Date] { CycleSettings.oneOffStarts(oneOffStartsStored) }
+
+    private var cycle: CoreLogic.Dashboard.Cycle {
+        .init(startDay: cycleStartDay, startsEarlyOnWeekends: startsEarlyOnWeekends, oneOffStarts: oneOffStarts)
+    }
+
+    private static let day = utcFormatter("d MMM yyyy")
+    private static let shortDay = utcFormatter("d MMM")
+
+    private static func utcFormatter(_ format: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.locale = Locale(identifier: "en_GB")
+        f.dateFormat = format
+        return f
+    }
+
     private var cycleFooter: String {
-        guard cycleStartDay != 1 else { return "Income and expenses are grouped by calendar month." }
+        let moved = " A moved start changes one month only, for a salary paid off schedule: that month runs to its usual end, and the month before ends the day before."
+        guard cycleStartDay != 1 else { return "Income and expenses are grouped by calendar month." + moved }
         var text = "Income and expenses are grouped from the \(Self.ordinal(cycleStartDay)) to the day before the \(Self.ordinal(cycleStartDay)) of the next month."
         if startsEarlyOnWeekends {
             text += " When the \(Self.ordinal(cycleStartDay)) is a Saturday or Sunday, the month starts on the Friday before, like a salary paid early."
         }
-        return text + " Every past month is recalculated."
+        return text + " Every past month is recalculated." + moved
     }
 
     private static func ordinal(_ day: Int) -> String {
@@ -232,3 +267,47 @@ private struct SettingsBrandHeader: View {
         .modelContainer(PreviewData.container)
 }
 #endif
+
+// Picks the day one month starts on instead, and says which usual start it replaces.
+private struct MoveMonthStartSheet: View {
+    let cycle: CoreLogic.Dashboard.Cycle
+    let onMove: (Date) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var picked = Date()
+
+    private var start: Date { CycleSettings.utcDay(picked) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DatePicker("Month Starts", selection: $picked, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                } footer: {
+                    Text("The month that usually starts on \(Self.day.string(from: cycle.usualStart(movedTo: start))) starts on \(Self.day.string(from: start)) instead.")
+                }
+            }
+            .navigationTitle("Move a Month's Start")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Move") {
+                        onMove(start)
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter()
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.locale = Locale(identifier: "en_GB")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+}

@@ -12,14 +12,12 @@ struct DashboardView: View {
     @AppStorage(SpaceSelection.key) private var currentSpaceId = ""
     @AppStorage(CycleSettings.startDayKey) private var cycleStartDay = 1
     @AppStorage(CycleSettings.startsEarlyOnWeekendsKey) private var startsEarlyOnWeekends = true
+    @AppStorage(CycleSettings.oneOffStartsKey) private var oneOffStarts = ""
     @State private var model: DashboardModel = .empty
 
     private func reload() {
         let scope = SpaceScope.resolve(rawCurrentId: currentSpaceId, spaces: spaces)
-        model = DashboardModel.load(
-            scope: scope,
-            cycle: .init(startDay: cycleStartDay, startsEarlyOnWeekends: startsEarlyOnWeekends),
-            in: ctx)
+        model = DashboardModel.load(scope: scope, cycle: CycleSettings.current, in: ctx)
     }
 
     var body: some View {
@@ -69,6 +67,7 @@ struct DashboardView: View {
         .onChange(of: currentSpaceId) { reload() }
         .onChange(of: cycleStartDay) { reload() }
         .onChange(of: startsEarlyOnWeekends) { reload() }
+        .onChange(of: oneOffStarts) { reload() }
         .reloadOnModelChange { reload() }
     }
 }
