@@ -57,6 +57,9 @@ extension CoreLogic {
 
             public var hasOneOffStarts: Bool { !oneOffStarts.isEmpty }
 
+            // False when an earlier start already moves the same month.
+            public func uses(_ start: Date) -> Bool { oneOffStarts.values.contains(utc.startOfDay(for: start)) }
+
             // Where the month that `start` moves would have started.
             public func usualStart(movedTo start: Date) -> Date {
                 let k = Dashboard.nearestMonth(to: utc.startOfDay(for: start), startDay: startDay, startsEarlyOnWeekends: startsEarlyOnWeekends)

@@ -297,6 +297,26 @@ final class DashboardTests: XCTestCase {
         // Two starts for the same month: the earlier wins.
         let both = D.Cycle(startDay: 20, oneOffStarts: [day(2026, 3, 24), day(2026, 3, 12)])
         XCTAssertEqual(D.cycleStart(day(2026, 3, 15), cycle: both), midnight(2026, 3, 12))
+        XCTAssertTrue(both.uses(day(2026, 3, 12)))
+        XCTAssertFalse(both.uses(day(2026, 3, 24)))
+    }
+
+    func testOneOffStartsInConsecutiveMonths() {
+        let cycle = D.Cycle(startDay: 20, oneOffStarts: [day(2026, 3, 12), day(2026, 4, 15)])
+        XCTAssertEqual(D.cycleStart(day(2026, 4, 14), cycle: cycle), midnight(2026, 3, 12))
+        XCTAssertEqual(D.cycleStart(day(2026, 4, 15), cycle: cycle), midnight(2026, 4, 15))
+        XCTAssertEqual(D.cycleStart(day(2026, 5, 19), cycle: cycle), midnight(2026, 4, 15))
+        XCTAssertEqual(D.cycleStart(day(2026, 5, 20), cycle: cycle), midnight(2026, 5, 20))
+        XCTAssertEqual(D.cycleStart(day(2026, 5, 1), cycle: cycle, offset: -1), midnight(2026, 3, 12))
+    }
+
+    // On calendar months, a salary paid on the last days of February starts March.
+    func testOneOffStartOnCalendarMonths() {
+        let cycle = D.Cycle(startDay: 1, oneOffStarts: [day(2026, 2, 27)])
+        XCTAssertEqual(D.cycleStart(day(2026, 2, 27), cycle: cycle), midnight(2026, 2, 27))
+        XCTAssertEqual(D.cycleStart(day(2026, 3, 31), cycle: cycle), midnight(2026, 2, 27))
+        XCTAssertEqual(D.cycleStart(day(2026, 2, 26), cycle: cycle), midnight(2026, 2, 1))
+        XCTAssertEqual(D.cycleStart(day(2026, 4, 1), cycle: cycle), midnight(2026, 4, 1))
     }
 
     func testCashFlowCountsASalaryPaidEarlyInTheMonthItStarts() throws {
