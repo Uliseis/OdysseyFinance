@@ -57,7 +57,9 @@ struct SettingsView: View {
                     }
                     ForEach(oneOffStarts, id: \.self) { start in
                         LabeledContent("Starts \(Self.day.string(from: start))",
-                                       value: "not \(Self.shortDay.string(from: cycle.usualStart(movedTo: start)))")
+                                       value: cycle.uses(start)
+                                           ? "not \(Self.shortDay.string(from: cycle.usualStart(movedTo: start)))"
+                                           : "unused: an earlier day moves that month")
                     }
                     .onDelete { offsets in
                         var starts = oneOffStarts
