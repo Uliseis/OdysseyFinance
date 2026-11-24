@@ -22,6 +22,7 @@ enum ForegroundBankSync {
         var banks: CoreLogic.SyncSummary.Banks?
         var snapshotAtDeadline: Task<Void, Never>?
         let shown: ShownProgress?
+        let cutOff = CoreLogic.CutOff()
         private(set) var started = false
         private(set) var cancelled = false
         private var run: Task<String, Never>?
@@ -41,6 +42,7 @@ enum ForegroundBankSync {
         // Cancels the run and gives it a second to record the banks it cut off, like the grace on
         // the 25-second path. Answers with the run's own summary if it ends in time.
         func stop() async -> String {
+            if !cancelled { cutOff.note("iOS ended the Shortcuts action") }
             cancel()
             guard let run else { return soFar }
             return await CoreLogic.Deadline.value(of: run, by: .now + .seconds(1)) ?? soFar
@@ -151,9 +153,15 @@ enum ForegroundBankSync {
     // run through `steps`, which then records the banks it cut off, as at the deadline.
     @MainActor
     static func syncAndRefresh(_ ctx: ModelContext, engine: CloudKitSyncEngine?, steps: Steps) async -> String {
-        let run = Task { @MainActor in await refresh(ctx, engine: engine, steps: steps) }
+        let run = CoreLogic.CutOff.$reason.withValue(steps.cutOff) {
+            Task { @MainActor in await refresh(ctx, engine: engine, steps: steps) }
+        }
         steps.start(run)
-        let summary = await withTaskCancellationHandler { await run.value } onCancel: { run.cancel() }
+        let cutOff = steps.cutOff
+        let summary = await withTaskCancellationHandler { await run.value } onCancel: {
+            cutOff.note("the Shortcuts action's task was cancelled")
+            run.cancel()
+        }
         steps.shown?.finish()
         await ClaudeBridge.exportSnapshot(ctx, force: true)
         return summary
@@ -216,15 +224,21 @@ enum ForegroundBankSync {
 // A foreground sync that the user backgrounds mid-run was suspended within seconds and left
 // its rows un-post-processed; the assertion buys ~30s to finish. The work runs as a task of its
 // own so that, when that time runs out, it can be cancelled and record the bank runs it cut
-// short as cut off instead of leaving them running. Cancelling the caller cancels it too.
+// short as cut off, and why, instead of leaving them running. Cancelling the caller cancels it too.
 @MainActor
 func withBackgroundTask<T: Sendable, E: Error>(
     _ name: String, _ body: @escaping @MainActor () async throws(E) -> T
 ) async throws(E) -> T {
-    let work = Task { @MainActor () -> Result<T, E> in
-        do throws(E) { return .success(try await body()) } catch { return .failure(error) }
+    let cutOff = CoreLogic.CutOff.reason ?? CoreLogic.CutOff()
+    let work = CoreLogic.CutOff.$reason.withValue(cutOff) {
+        Task { @MainActor () -> Result<T, E> in
+            do throws(E) { return .success(try await body()) } catch { return .failure(error) }
+        }
     }
-    let assertion = BackgroundAssertion(name) { work.cancel() }
+    let assertion = BackgroundAssertion(name) {
+        cutOff.note("iOS ended the app's background time")
+        work.cancel()
+    }
     defer { assertion.end() }
     let result = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
     return try result.get()

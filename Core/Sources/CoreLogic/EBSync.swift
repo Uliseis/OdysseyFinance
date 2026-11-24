@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import SwiftData
 import CoreModel
 import CoreIntegrations
@@ -15,6 +16,25 @@ public protocol EBSyncAPI: Sendable {
 extension EBClient: EBSyncAPI {}
 
 extension CoreLogic {
+    // Why a sync was cancelled. Whoever cancels it notes why first, and the runs it cut short
+    // record that rather than a bare "cut off". A task-local, so the work started under it and
+    // its child tasks see the same one. Notes keep their order: a refused extension, then the
+    // time that ran out.
+    public final class CutOff: Sendable {
+        @TaskLocal public static var reason: CutOff?
+        private let notes = Mutex<[String]>([])
+
+        public init() {}
+
+        public func note(_ why: String) {
+            notes.withLock { if !$0.contains(why) { $0.append(why) } }
+        }
+
+        var why: String? {
+            notes.withLock { $0.isEmpty ? nil : $0.joined(separator: ", then ") }
+        }
+    }
+
     // Ports lib/sync-enablebanking.ts: session validation, account upsert with IBAN
     // fallback + cross-connection repoint/merge guards, paginated BOOK transactions with
     // (accountId, externalId) dedupe, then the post-process pipeline. Error strings keep
@@ -477,7 +497,7 @@ extension CoreLogic {
         }
 
         private static func describe(_ error: Error) -> String {
-            if isCutOff(error) { return cutOff }
+            if isCutOff(error) { return CutOff.reason?.why.map { "cut off: \($0)" } ?? cutOff }
             if let eb = error as? EnableBankingError { return "\(eb.status) \(eb.body)" }
             return String(describing: error)
         }
